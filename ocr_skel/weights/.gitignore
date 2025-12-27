@@ -1,5 +1,2 @@
-# Ignore weight files (too large for git)
-*.pth
-*.pt
-*.ckpt
-*.weights
+# Weights tracked via Git LFS
+# *.pth files are now tracked
