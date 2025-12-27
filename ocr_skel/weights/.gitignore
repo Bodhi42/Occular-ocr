@@ -1,0 +1,5 @@
+# Ignore weight files (too large for git)
+*.pth
+*.pt
+*.ckpt
+*.weights
