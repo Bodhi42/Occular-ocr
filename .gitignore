@@ -7,8 +7,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-eggs/
-*.egg
 
 # Virtual environments
 venv/
@@ -18,7 +16,6 @@ venv/
 .idea/
 .vscode/
 *.swp
-*.swo
 
 # Jupyter
 .ipynb_checkpoints/
@@ -26,18 +23,10 @@ venv/
 # Test artifacts
 .pytest_cache/
 .coverage
-htmlcov/
 
 # OS
 .DS_Store
-Thumbs.db
 
-# Temp files
-*.tmp
+# Outputs
 *.log
-
-# Demo outputs
-out.json
-out_*.json
-demo_image.png
-test_hello_lower.png
+out*.json
