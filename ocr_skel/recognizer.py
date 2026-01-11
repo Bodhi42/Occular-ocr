@@ -1,45 +1,47 @@
-"""CRNN Recognizer wrapper"""
+"""CRNN MobileNetV3 Recognizer"""
 
 import numpy as np
 import torch
-import cv2
+from PIL import Image
 from typing import List, Tuple
-from .models.crnn_model import create_crnn
-from .models.model_utils import load_crnn_weights
+from pathlib import Path
+
+from .models.crnn_mobilenet import crnn_mobilenet_v3_large
 
 
-# Character set: digits + lowercase letters + blank
-# Total 37 characters (0-9, a-z, blank)
-CHARSET = "0123456789abcdefghijklmnopqrstuvwxyz"
-BLANK_IDX = len(CHARSET)  # CTC blank token
+# Model configuration
+INPUT_HEIGHT = 32
 
 
 class CRNNRecognizer:
-    """CRNN text recognizer (CNN+BiLSTM+CTC, pretrained)"""
+    """CRNN text recognizer (MobileNetV3-Large)"""
 
     def __init__(self, languages: List[str] = None, gpu: bool = True):
         """
         Args:
-            languages: список языков для распознавания (не используется, оставлен для совместимости)
+            languages: список языков (не используется, оставлен для совместимости)
             gpu: использовать GPU если доступен
         """
-        self.languages = languages or ['en']
+        self.languages = languages or ['ru', 'en']
         self.gpu = gpu and torch.cuda.is_available()
         self.device = torch.device('cuda' if self.gpu else 'cpu')
 
-        # Character set
-        self.charset = CHARSET
-        self.num_classes = len(self.charset) + 1  # +1 for CTC blank
+        # Load weights
+        weights_path = Path(__file__).parent / "weights" / "crnn_mobilenet_large.pth"
 
-        # Initialize CRNN model
-        self.model = create_crnn(num_classes=self.num_classes, pretrained=False)
+        if not weights_path.exists():
+            raise FileNotFoundError(f"Recognition weights not found: {weights_path}")
 
-        # Load pretrained weights
-        try:
-            self.model = load_crnn_weights(self.model, device=self.device)
-        except Exception as e:
-            print(f"Warning: Could not load CRNN weights: {e}")
-            print("Using model with random initialization")
+        checkpoint = torch.load(weights_path, map_location=self.device, weights_only=False)
+        self.vocab = checkpoint['vocab']
+        val_cer = checkpoint.get('val_cer', 0)
+
+        # Create model
+        self.model = crnn_mobilenet_v3_large(vocab=self.vocab)
+
+        # Load state dict
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Loaded CRNN weights (CER={val_cer:.4f})")
 
         self.model.to(self.device)
         self.model.eval()
@@ -65,32 +67,26 @@ class CRNNRecognizer:
                 results.append(("", 0.0))
                 continue
 
-            # Preprocess for CRNN
+            # Preprocess for model
             img_tensor = self._preprocess_image(crop)
             img_tensor = img_tensor.to(self.device)
 
             # Forward pass
             with torch.no_grad():
-                output = self.model(img_tensor)  # (1, W/4, num_classes)
+                output = self.model(img_tensor)
 
-            # Decode CTC output
-            text, confidence = self._decode_output(output)
+            # Get predictions
+            if 'preds' in output and output['preds']:
+                text, confidence = output['preds'][0]
+            else:
+                text, confidence = "", 0.0
 
             results.append((text, confidence))
 
         return results
 
     def _crop_quad(self, image: np.ndarray, quad: np.ndarray) -> np.ndarray:
-        """
-        Crop quad region from image
-
-        Args:
-            image: RGB image (H, W, C)
-            quad: quad coordinates [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
-
-        Returns:
-            Cropped region
-        """
+        """Crop quad region from image"""
         quad = np.array(quad)
         x_coords = quad[:, 0]
         y_coords = quad[:, 1]
@@ -105,86 +101,31 @@ class CRNNRecognizer:
         x_max = min(w, x_max)
         y_max = min(h, y_max)
 
-        # Crop region
-        crop = image[y_min:y_max, x_min:x_max]
+        return image[y_min:y_max, x_min:x_max]
 
-        return crop
-
-    def _preprocess_image(self, image: np.ndarray, target_height=32) -> torch.Tensor:
+    def _preprocess_image(self, image: np.ndarray) -> torch.Tensor:
         """
-        Preprocess image for CRNN
+        Preprocess image for CRNN (matches training preprocessing exactly)
 
         Args:
             image: RGB image (H, W, C)
-            target_height: target height (32 for CRNN)
 
         Returns:
-            Tensor (1, 1, 32, W')
+            Tensor (1, 3, 32, W) - variable width
         """
-        # Convert to grayscale
-        if len(image.shape) == 3 and image.shape[2] == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = image
+        h, w = image.shape[:2]
 
-        h, w = gray.shape
+        # Scale to target height, keeping aspect ratio
+        scale = INPUT_HEIGHT / h
+        new_w = int(w * scale)
+        new_w = max(new_w, 8)  # Minimum width
 
-        # Calculate target width maintaining aspect ratio
-        aspect_ratio = w / h
-        target_width = int(target_height * aspect_ratio)
+        # Use PIL BILINEAR resize (same as training)
+        pil_img = Image.fromarray(image)
+        pil_img = pil_img.resize((new_w, INPUT_HEIGHT), Image.BILINEAR)
 
-        # Minimum width
-        target_width = max(target_width, target_height)
-
-        # Resize to target height
-        resized = cv2.resize(gray, (target_width, target_height))
-
-        # Normalize to [0, 1]
-        normalized = resized.astype(np.float32) / 255.0
-
-        # Convert to tensor: (H, W) -> (1, 1, H, W)
-        tensor = torch.from_numpy(normalized).unsqueeze(0).unsqueeze(0)
+        # Convert to tensor and normalize (same as training)
+        tensor = torch.tensor(np.array(pil_img)).permute(2, 0, 1).float() / 255.0
+        tensor = tensor.unsqueeze(0)
 
         return tensor
-
-    def _decode_output(self, output: torch.Tensor) -> Tuple[str, float]:
-        """
-        Decode CTC output to text
-
-        Args:
-            output: model output (1, T, num_classes)
-
-        Returns:
-            Tuple of (text, confidence)
-        """
-        # Get predictions: (1, T, num_classes) -> (T, num_classes)
-        output = output.squeeze(0)
-
-        # Get most likely character at each timestep
-        probs = torch.softmax(output, dim=1)
-        max_probs, preds = probs.max(dim=1)
-
-        # CTC greedy decoding
-        preds = preds.cpu().numpy()
-        max_probs = max_probs.cpu().numpy()
-
-        # Remove consecutive duplicates and blanks
-        chars = []
-        prev_char = None
-        confidences = []
-
-        for pred, prob in zip(preds, max_probs):
-            if pred == BLANK_IDX:
-                prev_char = None
-                continue
-
-            if pred != prev_char:
-                if pred < len(self.charset):
-                    chars.append(self.charset[pred])
-                    confidences.append(prob)
-                prev_char = pred
-
-        text = ''.join(chars)
-        confidence = float(np.mean(confidences)) if confidences else 0.0
-
-        return text, confidence
