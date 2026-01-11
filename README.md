@@ -1,5 +1,8 @@
 # Occular OCR
 
+[![License: GPL-3.0](https://img.shields.io/badge/Code-GPL--3.0-blue.svg)](LICENSE)
+[![Model License](https://img.shields.io/badge/Weights-Custom-orange.svg)](MODEL_LICENSE.md)
+
 **Быстрый и точный OCR для русскоязычных документов.**
 
 - **В 20 раз быстрее** EasyOCR на CPU
