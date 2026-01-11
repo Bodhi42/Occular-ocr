@@ -52,16 +52,12 @@ class DBNetDetectorONNX:
         return quads
 
     def _preprocess(self, image: np.ndarray):
-        """Preprocess image for detection"""
+        """Preprocess image for detection (matches PyTorch exactly)"""
         h, w = image.shape[:2]
 
-        # Resize to multiple of 32, max 1280
-        max_size = 1280
-        scale = min(max_size / max(h, w), 1.0)
-        new_w = int(w * scale / 32) * 32
-        new_h = int(h * scale / 32) * 32
-        new_w = max(32, new_w)
-        new_h = max(32, new_h)
+        # Pad to multiple of 32 (same as PyTorch)
+        new_h = (h + 31) // 32 * 32
+        new_w = (w + 31) // 32 * 32
 
         resized = cv2.resize(image, (new_w, new_h))
 
@@ -80,74 +76,60 @@ class DBNetDetectorONNX:
         return tensor, scale_w, scale_h
 
     def _postprocess(self, prob_map, scale_w, scale_h, orig_w, orig_h):
-        """Extract quads from probability map"""
-        binary = (prob_map > THRESHOLD).astype(np.uint8)
+        """Extract quads from probability map (matches PyTorch exactly)"""
+        binary_mask = (prob_map > THRESHOLD).astype(np.uint8) * 255
 
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         quads = []
         for contour in contours:
-            if cv2.contourArea(contour) < MIN_AREA:
+            area = cv2.contourArea(contour)
+            if area < MIN_AREA:
                 continue
 
-            # Get minimum area rectangle
-            rect = cv2.minAreaRect(contour)
-            box = cv2.boxPoints(rect)
-
-            # Check score
-            mask = np.zeros_like(prob_map, dtype=np.uint8)
-            cv2.fillPoly(mask, [contour], 1)
-            score = (prob_map * mask).sum() / mask.sum()
-
+            # Calculate score (same as PyTorch)
+            mask = np.zeros(prob_map.shape, dtype=np.uint8)
+            cv2.drawContours(mask, [contour], 0, 1, -1)
+            score = (prob_map * mask).sum() / (mask.sum() + 1e-6)
             if score < BOX_THRESH:
                 continue
 
-            # Unclip
-            poly = Polygon(box)
-            if not poly.is_valid or poly.area < 1:
-                continue
+            # Unclip contour first, then minAreaRect (same as PyTorch)
+            expanded = self._unclip_polygon(contour.squeeze(1), UNCLIP_RATIO)
 
-            distance = poly.area * UNCLIP_RATIO / poly.length
-            offset = pyclipper.PyclipperOffset()
-            offset.AddPath(box.astype(np.int64).tolist(), pyclipper.JT_ROUND, pyclipper.ET_CLOSEDPOLYGON)
-            expanded = offset.Execute(distance)
-
-            if not expanded:
-                continue
-
-            expanded = np.array(expanded[0])
-            if len(expanded) < 4:
-                continue
-
-            # Get bounding box
-            rect = cv2.minAreaRect(expanded)
+            rect = cv2.minAreaRect(expanded.reshape(-1, 1, 2))
             box = cv2.boxPoints(rect)
 
             # Scale back to original size
-            box[:, 0] *= scale_w
-            box[:, 1] *= scale_h
+            box[:, 0] = np.clip(box[:, 0] * scale_w, 0, orig_w)
+            box[:, 1] = np.clip(box[:, 1] * scale_h, 0, orig_h)
 
-            # Clip to image bounds
-            box[:, 0] = np.clip(box[:, 0], 0, orig_w)
-            box[:, 1] = np.clip(box[:, 1], 0, orig_h)
-
-            # Order points: top-left, top-right, bottom-right, bottom-left
-            box = self._order_points(box)
-
-            quads.append(box.astype(np.float32))
+            # Order points (same as PyTorch)
+            quad = self._order_points(box.astype(np.float32))
+            quads.append(quad)
 
         return quads
 
+    def _unclip_polygon(self, polygon, unclip_ratio):
+        """Expand polygon using Vatti clipping (same as PyTorch)"""
+        poly = Polygon(polygon)
+        if poly.area < 1 or poly.length < 1:
+            return polygon
+        distance = poly.area * unclip_ratio / poly.length
+        offset = pyclipper.PyclipperOffset()
+        offset.AddPath(polygon.tolist(), pyclipper.JT_ROUND, pyclipper.ET_CLOSEDPOLYGON)
+        expanded = offset.Execute(distance)
+        if not expanded:
+            return polygon
+        return np.array(expanded[0], dtype=np.int32)
+
     def _order_points(self, pts):
-        """Order points clockwise starting from top-left"""
-        rect = np.zeros((4, 2), dtype=np.float32)
-
-        s = pts.sum(axis=1)
-        rect[0] = pts[np.argmin(s)]  # top-left
-        rect[2] = pts[np.argmax(s)]  # bottom-right
-
-        diff = np.diff(pts, axis=1)
-        rect[1] = pts[np.argmin(diff)]  # top-right
-        rect[3] = pts[np.argmax(diff)]  # bottom-left
-
-        return rect
+        """Order points clockwise starting from top-left (same as PyTorch)"""
+        pts = pts[np.argsort(pts[:, 1])]
+        top = pts[:2]
+        top = top[np.argsort(top[:, 0])]
+        tl, tr = top
+        bottom = pts[2:]
+        bottom = bottom[np.argsort(bottom[:, 0])]
+        bl, br = bottom
+        return np.array([tl, tr, br, bl], dtype=np.float32)
