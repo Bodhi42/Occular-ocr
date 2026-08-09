@@ -8,42 +8,34 @@ Occular OCR Package
 
 # Для продвинутых:
     from ocr_skel import OCRPipeline
-    pipeline = OCRPipeline(onnx=True, gpu=False)
+    pipeline = OCRPipeline()
     results = pipeline.process_pdf("doc.pdf", dpi=300, workers=8)
 
 # CLI:
     ocr photo.png
-    ocr document.pdf --onnx --workers 4
+    ocr document.pdf --workers 4
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.1"
 
 from typing import Union, List, Dict, Optional
 from pathlib import Path
 
 from .registry import Registry
 from .pipeline import OCRPipeline as _OCRPipelineBase, get_optimal_workers
+from .model_files import model_info, download_reading_order, reading_order_ready, WEIGHTS_DIR
+from .settings import Settings
 
 
 # ============================================================================
 # Регистрация компонентов
 # ============================================================================
 
-from .dbnet_detector import DBNetDetector
-from .recognizer import CRNNRecognizer
-
-Registry.register_detector("dbnet", DBNetDetector)
-Registry.register_recognizer("crnn", CRNNRecognizer)
-
-# ONNX версии (если доступны)
-try:
-    from .dbnet_detector_onnx import DBNetDetectorONNX
-    from .recognizer_onnx import CRNNRecognizerONNX
-    Registry.register_detector("dbnet-onnx", DBNetDetectorONNX)
-    Registry.register_recognizer("crnn-onnx", CRNNRecognizerONNX)
-    _onnx_available = True
-except ImportError:
-    _onnx_available = False
+# Библиотека CPU-only ONNX.
+from .dbnet_detector_onnx import DBNetDetectorONNX
+from .recognizer_onnx import CRNNRecognizerONNX
+Registry.register_detector("dbnet-onnx", DBNetDetectorONNX)
+Registry.register_recognizer("crnn-onnx", CRNNRecognizerONNX)
 
 
 def _ensure_registered():
@@ -55,13 +47,17 @@ def _ensure_registered():
 # Простой API для чайников
 # ============================================================================
 
-def ocr(file_path: str, *, onnx: bool = True) -> Union[str, List[str]]:
+def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
+        num_threads: Optional[int] = None, gpu: bool = False) -> Union[str, List[str]]:
     """
     Распознать текст из изображения или PDF.
 
     Args:
         file_path: путь к файлу (изображение или PDF)
-        onnx: использовать ONNX Runtime (быстрее на AMD/без MKL)
+        deskew: выпрямлять наклон скана (по умолчанию True)
+        lm: beam-CTC + языковая модель для декодирования (по умолчанию True; False = быстрый greedy)
+        num_threads: число CPU-ядер (None = min(доступные, 4))
+        gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
 
     Returns:
         Для изображения: строка с распознанным текстом
@@ -75,12 +71,13 @@ def ocr(file_path: str, *, onnx: bool = True) -> Union[str, List[str]]:
     """
     _ensure_registered()
 
-    detector = "dbnet-onnx" if onnx else "dbnet"
-    recognizer = "crnn-onnx" if onnx else "crnn"
-
     pipeline = _OCRPipelineBase(
-        detector_name=detector,
-        recognizer_name=recognizer
+        detector_name="dbnet-onnx",
+        recognizer_name="crnn-onnx",
+        deskew=deskew,
+        lm=lm,
+        num_threads=num_threads,
+        gpu=gpu
     )
 
     path = Path(file_path)
@@ -101,13 +98,17 @@ def ocr(file_path: str, *, onnx: bool = True) -> Union[str, List[str]]:
         return "\n".join(item["text"] for item in sorted_results)
 
 
-def ocr_detailed(file_path: str, *, onnx: bool = True) -> Union[List[Dict], List[Dict]]:
+def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
+                 num_threads: Optional[int] = None, gpu: bool = False) -> List[Dict]:
     """
     Распознать текст с полной информацией (координаты, confidence).
 
     Args:
         file_path: путь к файлу
-        onnx: использовать ONNX Runtime
+        deskew: выпрямлять наклон скана (по умолчанию True)
+        lm: beam-CTC + языковая модель для декодирования (по умолчанию True; False = быстрый greedy)
+        num_threads: число CPU-ядер (None = min(доступные, 4))
+        gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
 
     Returns:
         Список словарей {"quad": [...], "text": str, "confidence": float}
@@ -120,12 +121,13 @@ def ocr_detailed(file_path: str, *, onnx: bool = True) -> Union[List[Dict], List
     """
     _ensure_registered()
 
-    detector = "dbnet-onnx" if onnx else "dbnet"
-    recognizer = "crnn-onnx" if onnx else "crnn"
-
     pipeline = _OCRPipelineBase(
-        detector_name=detector,
-        recognizer_name=recognizer
+        detector_name="dbnet-onnx",
+        recognizer_name="crnn-onnx",
+        deskew=deskew,
+        lm=lm,
+        num_threads=num_threads,
+        gpu=gpu
     )
 
     path = Path(file_path)
@@ -143,39 +145,56 @@ class OCRPipeline:
     """
     OCR Pipeline для продвинутых пользователей.
 
-    Args:
-        onnx: использовать ONNX Runtime (быстрее на AMD/без MKL)
-        gpu: использовать GPU (если доступен)
-        detector: явно указать детектор ("dbnet", "dbnet-onnx")
-        recognizer: явно указать распознаватель ("crnn", "crnn-onnx")
+    Настройки — через объект Settings или отдельные kwargs (deskew, reading_order, num_threads).
 
     Example:
-        >>> pipeline = OCRPipeline(onnx=True)
+        >>> pipeline = OCRPipeline()
         >>> results = pipeline.process_image("photo.png")
         >>> text = pipeline.get_text("photo.png")
     """
 
     def __init__(
         self,
+        settings: Optional[Settings] = None,
         *,
-        onnx: bool = True,
+        deskew: bool = True,
+        reading_order: bool = False,
+        lm: bool = True,
+        num_threads: Optional[int] = None,
         gpu: bool = False,
         detector: Optional[str] = None,
         recognizer: Optional[str] = None
     ):
         _ensure_registered()
 
-        # Определяем компоненты
-        if detector is None:
-            detector = "dbnet-onnx" if onnx else "dbnet"
-        if recognizer is None:
-            recognizer = "crnn-onnx" if onnx else "crnn"
+        # Единые настройки: можно передать объект Settings, либо отдельные kwargs (совместимость).
+        if settings is None:
+            settings = Settings(deskew=deskew, reading_order=reading_order, lm=lm,
+                                num_threads=num_threads, gpu=gpu,
+                                detector=detector, recognizer=recognizer)
+        self.settings = settings
+        s = settings
+
+        detector = s.detector or "dbnet-onnx"
+        recognizer = s.recognizer or "crnn-onnx"
+
+        # Порядок чтения (layout) — опционально, ВЫКЛ по умолчанию. Модель качается с HuggingFace.
+        self.reading_order = s.reading_order
+        if s.reading_order and not reading_order_ready():
+            raise RuntimeError(
+                "reading_order=True, но модель порядка чтения не скачана.\n"
+                "Скачайте её:  from ocr_skel import download_reading_order; download_reading_order()\n"
+                "Или посмотрите статус:  from ocr_skel import model_info; model_info()"
+            )
 
         self._pipeline = _OCRPipelineBase(
             detector_name=detector,
             recognizer_name=recognizer,
-            detector_kwargs={"gpu": gpu},
-            recognizer_kwargs={"gpu": gpu}
+            deskew=s.deskew,
+            reading_order=s.reading_order,
+            lm=s.lm,
+            num_threads=s.num_threads,
+            gpu=s.gpu
         )
 
     def process_image(self, image_path: str) -> List[Dict]:
@@ -191,7 +210,7 @@ class OCRPipeline:
         self,
         pdf_path: str,
         *,
-        dpi: int = 200,
+        dpi: int = 300,
         force_ocr: bool = False,
         workers: Optional[int] = None
     ) -> List[Dict]:
@@ -200,7 +219,7 @@ class OCRPipeline:
 
         Args:
             pdf_path: путь к PDF
-            dpi: разрешение рендеринга (default: 200)
+            dpi: разрешение рендеринга (default: 300)
             force_ocr: принудительно OCR даже для векторных PDF
             workers: количество воркеров (None = auto, max 4)
 
@@ -244,6 +263,12 @@ __all__ = [
     "ocr_detailed",
     # Продвинутый API
     "OCRPipeline",
+    "Settings",
+    # Модели: где лежат и как скачать порядок чтения (для чайников)
+    "model_info",
+    "download_reading_order",
+    "reading_order_ready",
+    "WEIGHTS_DIR",
     # Утилиты
     "get_optimal_workers",
     # Низкоуровневый доступ

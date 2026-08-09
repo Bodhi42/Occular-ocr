@@ -8,10 +8,10 @@ class Registry:
 
     _detectors: Dict[str, Type] = {}
     _recognizers: Dict[str, Type] = {}
-    _default_detector: str = "dbnet"
-    _default_recognizer: str = "crnn"
+    _default_detector: str = "dbnet-onnx"
+    _default_recognizer: str = "crnn-onnx"
 
-    # Кэш инстансов (ключ: (name, gpu))
+    # Кэш инстансов (ключ: (name, num_threads, gpu))
     _detector_cache: Dict[tuple, Any] = {}
     _recognizer_cache: Dict[tuple, Any] = {}
 
@@ -32,8 +32,8 @@ class Registry:
         if name not in cls._detectors:
             raise ValueError(f"Detector '{name}' not found. Available: {list(cls._detectors.keys())}")
 
-        # Кэш по (name, gpu)
-        cache_key = (name, kwargs.get('gpu', False))
+        # Кэш по (name, num_threads, gpu)
+        cache_key = (name, kwargs.get('num_threads'), kwargs.get('gpu'))
         if cache_key not in cls._detector_cache:
             cls._detector_cache[cache_key] = cls._detectors[name](**kwargs)
         return cls._detector_cache[cache_key]
@@ -45,8 +45,8 @@ class Registry:
         if name not in cls._recognizers:
             raise ValueError(f"Recognizer '{name}' not found. Available: {list(cls._recognizers.keys())}")
 
-        # Кэш по (name, gpu)
-        cache_key = (name, kwargs.get('gpu', False))
+        # Кэш по (name, num_threads, gpu)
+        cache_key = (name, kwargs.get('num_threads'), kwargs.get('gpu'), kwargs.get('lm'))
         if cache_key not in cls._recognizer_cache:
             cls._recognizer_cache[cache_key] = cls._recognizers[name](**kwargs)
         return cls._recognizer_cache[cache_key]

@@ -1,0 +1,6 @@
+include LICENSE WEIGHTS_LICENSE.md README.md CHANGELOG.md requirements.txt
+recursive-include ocr_skel *.py
+prune ocr_skel/weights
+prune assets
+prune tests
+global-exclude *.onnx *.jpg *.jpeg *.png *.ipynb *.pyc

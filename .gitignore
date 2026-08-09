@@ -30,3 +30,9 @@ venv/
 # Outputs
 *.log
 out*.json
+
+# Model weights — downloaded from Hugging Face on first use, never committed
+ocr_skel/weights/
+*.onnx
+*.pth
+*.npz

@@ -1,4 +1,9 @@
-"""DBNet Detector with ONNX Runtime"""
+"""Text detector (ONNX Runtime), ResNet50 backbone.
+
+Вход 'x', RGB + ImageNet-норма, resize длинной стороной до 1280 + белый паддинг до квадрата.
+Полные боксы (мало клиппинга) → надёжно на плотном тексте: и русские документы (180+ строк),
+и мелкий латинский текст (40+ строк).
+"""
 
 import numpy as np
 import onnxruntime as ort
@@ -9,127 +14,97 @@ import pyclipper
 from shapely.geometry import Polygon
 
 
-THRESHOLD = 0.252
-UNCLIP_RATIO = 2.44
-BOX_THRESH = 0.52
-MIN_AREA = 38
+VAL = 1280                                                  # длинная сторона (как на валидации)
+MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+# CANON нашего детектора (canon-metric.md — не менять без записи в вики)
+BIN_T = 0.3          # бинаризация prob-карты
+SCORE_T = 0.5        # средний prob внутри контура
+MIN_SIZE = 3
+UNCLIP = 2.0
+MAX_CAND = 500
 
 
 class DBNetDetectorONNX:
-    """DBNet text detector using ONNX Runtime (1.9x faster on CPU)"""
+    """Text detector using ONNX Runtime (ResNet50 backbone, RGB+ImageNet)."""
 
-    def __init__(self, gpu: bool = False):
-        weights_dir = Path(__file__).parent / "weights"
-        onnx_path = weights_dir / "dbnet.onnx"
+    def __init__(self, num_threads: int = 4, gpu: bool = False):
+        from .model_files import ensure_weight
+        onnx_path = Path(ensure_weight("detector_dbnet_fp32.onnx"))   # локально или с HF
 
-        if not onnx_path.exists():
-            raise FileNotFoundError(f"ONNX model not found: {onnx_path}")
-
-        # Optimized session options
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = 0  # Auto-detect
+        # FIX v0.2: было intra_op_num_threads=0 (=все ядра) → жрало всю CPU (× воркеры пайплайна).
+        sess_options.intra_op_num_threads = max(1, int(num_threads))
+        sess_options.inter_op_num_threads = 1
+        try:
+            cv2.setNumThreads(max(1, int(num_threads)))     # OpenCV тоже по умолч. берёт все ядра
+        except Exception:
+            pass
 
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if gpu else ['CPUExecutionProvider']
+        from ._runtime import resolve_providers
+        providers = resolve_providers(gpu)     # CPU по умолчанию; CUDA при gpu=True (нужен onnxruntime-gpu)
         self.session = ort.InferenceSession(str(onnx_path), sess_options=sess_options, providers=providers)
+        self.input_name = self.session.get_inputs()[0].name  # 'x'
 
-        print(f"Loaded DBNet ONNX")
+        dev = "GPU/CUDA" if providers[0].startswith("CUDA") else "CPU"
+        print(f"Loaded DBNet detector ({dev}, threads={sess_options.intra_op_num_threads})")
 
     def detect(self, image: np.ndarray) -> List[np.ndarray]:
-        """Detect text regions"""
+        """Detect text regions. image — RGB (как отдаёт пайплайн; наш детектор училс на RGB)."""
         orig_h, orig_w = image.shape[:2]
-
-        # Preprocess
-        input_tensor, scale_w, scale_h = self._preprocess(image)
-
-        # ONNX inference
-        prob_map = self.session.run(None, {'input': input_tensor})[0]
-        prob_map = prob_map[0, 0]  # (H, W)
-
-        # Post-process
-        quads = self._postprocess(prob_map, scale_w, scale_h, orig_w, orig_h)
-
-        return quads
+        input_tensor, scale = self._preprocess(image)
+        prob_map = self.session.run(None, {self.input_name: input_tensor})[0][0]  # 'prob' → (H, W)
+        return self._postprocess(prob_map, scale, orig_w, orig_h)
 
     def _preprocess(self, image: np.ndarray):
-        """Preprocess image for detection (matches PyTorch exactly)"""
+        """Resize длинной стороной до VAL, белый паддинг до квадрата, RGB+ImageNet (как resize_pad)."""
         h, w = image.shape[:2]
+        s = VAL / max(h, w)
+        nw, nh = max(1, int(round(w * s))), max(1, int(round(h * s)))
+        resized = cv2.resize(image, (nw, nh))
+        canvas = np.full((VAL, VAL, 3), 255, np.uint8)
+        canvas[:nh, :nw] = resized
+        tensor = ((canvas.astype(np.float32) / 255.0 - MEAN) / STD).transpose(2, 0, 1)[np.newaxis, ...].astype(np.float32)
+        return tensor, s
 
-        # Pad to multiple of 32 (same as PyTorch)
-        new_h = (h + 31) // 32 * 32
-        new_w = (w + 31) // 32 * 32
-
-        resized = cv2.resize(image, (new_w, new_h))
-
-        # Normalize
-        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-
-        tensor = resized.astype(np.float32) / 255.0
-        tensor = (tensor - mean) / std
-        tensor = tensor.transpose(2, 0, 1)  # HWC -> CHW
-        tensor = tensor[np.newaxis, ...]  # Add batch
-
-        scale_w = w / new_w
-        scale_h = h / new_h
-
-        return tensor, scale_w, scale_h
-
-    def _postprocess(self, prob_map, scale_w, scale_h, orig_w, orig_h):
-        """Extract quads from probability map (matches PyTorch exactly)"""
-        binary_mask = (prob_map > THRESHOLD).astype(np.uint8) * 255
-
-        contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    def _postprocess(self, prob_map, scale, orig_w, orig_h):
+        """Точный порт canon_decode (постпроц, которым детектор ВАЛИДИРОВАЛСЯ → canon-F1 0.9016):
+        бинаризация → отсев area/score → Vatti-unclip СЫРОГО контура → axis-aligned boundingRect.
+        """
+        binary = (prob_map > BIN_T).astype(np.uint8)
+        contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) > MAX_CAND:
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)[:MAX_CAND]
 
         quads = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < MIN_AREA:
+        for c in contours:
+            if cv2.contourArea(c) < MIN_SIZE * MIN_SIZE:
                 continue
 
-            # Calculate score (same as PyTorch)
-            mask = np.zeros(prob_map.shape, dtype=np.uint8)
-            cv2.drawContours(mask, [contour], 0, 1, -1)
-            score = (prob_map * mask).sum() / (mask.sum() + 1e-6)
-            if score < BOX_THRESH:
+            mk = np.zeros(prob_map.shape, dtype=np.uint8)
+            cv2.drawContours(mk, [c], -1, 1, -1)
+            if not mk.any() or float(prob_map[mk > 0].mean()) < SCORE_T:
                 continue
 
-            # Unclip contour first, then minAreaRect (same as PyTorch)
-            expanded = self._unclip_polygon(contour.squeeze(1), UNCLIP_RATIO)
+            pts = c.reshape(-1, 2)
+            if len(pts) < 3:
+                continue
+            area = cv2.contourArea(c)
+            perim = cv2.arcLength(c, True)
+            if perim < 1:
+                continue
 
-            rect = cv2.minAreaRect(expanded.reshape(-1, 1, 2))
-            box = cv2.boxPoints(rect)
+            pco = pyclipper.PyclipperOffset()
+            pco.AddPath(pts.tolist(), pyclipper.JT_ROUND, pyclipper.ET_CLOSEDPOLYGON)
+            ex = pco.Execute(area * UNCLIP / perim)
+            if not ex:
+                continue
 
-            # Scale back to original size
-            box[:, 0] = np.clip(box[:, 0] * scale_w, 0, orig_w)
-            box[:, 1] = np.clip(box[:, 1] * scale_h, 0, orig_h)
-
-            # Order points (same as PyTorch)
-            quad = self._order_points(box.astype(np.float32))
-            quads.append(quad)
+            x, y, w, h = cv2.boundingRect(np.array(ex[0]).astype(np.int32))
+            # координаты 1280-канваса → оригинал; axis-aligned квадрат (как canon_decode)
+            x0, y0 = max(0.0, x / scale), max(0.0, y / scale)
+            x1, y1 = min(float(orig_w), (x + w) / scale), min(float(orig_h), (y + h) / scale)
+            quads.append(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float32))
 
         return quads
-
-    def _unclip_polygon(self, polygon, unclip_ratio):
-        """Expand polygon using Vatti clipping (same as PyTorch)"""
-        poly = Polygon(polygon)
-        if poly.area < 1 or poly.length < 1:
-            return polygon
-        distance = poly.area * unclip_ratio / poly.length
-        offset = pyclipper.PyclipperOffset()
-        offset.AddPath(polygon.tolist(), pyclipper.JT_ROUND, pyclipper.ET_CLOSEDPOLYGON)
-        expanded = offset.Execute(distance)
-        if not expanded:
-            return polygon
-        return np.array(expanded[0], dtype=np.int32)
-
-    def _order_points(self, pts):
-        """Order points clockwise starting from top-left (same as PyTorch)"""
-        pts = pts[np.argsort(pts[:, 1])]
-        top = pts[:2]
-        top = top[np.argsort(top[:, 0])]
-        tl, tr = top
-        bottom = pts[2:]
-        bottom = bottom[np.argsort(bottom[:, 0])]
-        bl, br = bottom
-        return np.array([tl, tr, br, bl], dtype=np.float32)

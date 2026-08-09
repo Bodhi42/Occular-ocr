@@ -1,148 +1,149 @@
-"""CRNN Recognizer with ONNX Runtime"""
+"""Text recognizer (ONNX Runtime).
 
+Компактный распознаватель строк: вход H48, норма [-1,1], BGR (cv2), выход [B,T,186], CTC blank=0.
+Имя класса оставлено для совместимости с реестром.
+"""
+
+import threading
 import numpy as np
+import cv2
 import onnxruntime as ort
-from PIL import Image
 from typing import List, Tuple
 from pathlib import Path
 from itertools import groupby
 
 
-INPUT_HEIGHT = 32
+INPUT_HEIGHT = 48       # высота входа
+MAX_WIDTH = 640         # var-width cap
 
 
 class CRNNRecognizerONNX:
-    """CRNN text recognizer using ONNX Runtime (2.4x faster on CPU)"""
+    """Text recognizer via ONNX Runtime (var-width, blank=0)."""
 
-    def __init__(self, languages: List[str] = None, gpu: bool = False):
+    def __init__(self, languages: List[str] = None, num_threads: int = 4, gpu: bool = False,
+                 lm: bool = True):
         self.languages = languages or ['ru', 'en']
+        self.lm = bool(lm)          # beam-CTC + языковая модель (по умолчанию ВКЛ)
+        self._lm_decoder = None
+        self._lm_lock = threading.Lock()   # ленивая инициализация LM — потокобезопасно (общий инстанс у PDF-воркеров)
 
-        weights_dir = Path(__file__).parent / "weights"
-        onnx_path = weights_dir / "crnn_encoder.onnx"
-        pth_path = weights_dir / "crnn_mobilenet_large.pth"
+        from .model_files import ensure_weight
+        onnx_path = Path(ensure_weight("recognizer_svtr_fp32.onnx"))     # локально или с HF
+        charset_path = Path(ensure_weight("recognizer_charset.txt"))
 
-        if not onnx_path.exists():
-            raise FileNotFoundError(f"ONNX model not found: {onnx_path}")
+        # Charset: индекс 0 = CTC blank; символ для класса k = vocab[k-1] (как rec_data.Charset)
+        self.vocab = charset_path.read_text(encoding='utf-8').split('\n')
 
-        # Load vocab from PyTorch checkpoint
-        import torch
-        checkpoint = torch.load(pth_path, map_location='cpu', weights_only=False)
-        self.vocab = checkpoint['vocab']
-
-        # Create ONNX session with optimizations
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = 0  # Auto-detect
+        # FIX v0.2: было intra_op_num_threads=0 (=все ядра) → onnxruntime плодил поток на каждое
+        # из N ядер и с воркерами пайплайна жрал всю CPU. Теперь ограничено.
+        sess_options.intra_op_num_threads = max(1, int(num_threads))
+        sess_options.inter_op_num_threads = 1
+        try: cv2.setNumThreads(max(1,int(num_threads)))  # OpenCV тоже по умолч. берёт все ядра
+        except Exception: pass
 
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if gpu else ['CPUExecutionProvider']
+        from ._runtime import resolve_providers
+        providers = resolve_providers(gpu)     # CPU по умолчанию; CUDA при gpu=True (нужен onnxruntime-gpu)
         self.session = ort.InferenceSession(str(onnx_path), sess_options=sess_options, providers=providers)
+        self.input_name = self.session.get_inputs()[0].name  # 'x'
 
-        print(f"Loaded CRNN ONNX (vocab={len(self.vocab)} chars)")
+        dev = "GPU/CUDA" if providers[0].startswith("CUDA") else "CPU"
+        print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, {dev}, threads={sess_options.intra_op_num_threads})")
+
+    def _ensure_lm(self):
+        """Лениво построить beam+LM-декодер при первом реальном распознавании.
+        LM (~268 МБ + униграммы) НЕ грузится, если распознавание так и не понадобилось
+        (например, чисто-векторный PDF). Потокобезопасно."""
+        if self._lm_decoder is not None:
+            return self._lm_decoder
+        with self._lm_lock:
+            if self._lm_decoder is None:
+                # при первом создании качает LM с HF / берёт OCCULAR_LM_DIR
+                from .decoder_lm import LMDecoder
+                self._lm_decoder = LMDecoder(self.vocab)
+        return self._lm_decoder
+
+    def _decode(self, logits_1tc: np.ndarray) -> Tuple[str, float]:
+        """beam+LM если включён, иначе greedy. LM строится лениво при первом вызове."""
+        if self.lm:
+            return self._ensure_lm().decode(logits_1tc)
+        return self._ctc_decode(logits_1tc)
 
     def recognize(self, image: np.ndarray, quads: List[np.ndarray]) -> List[Tuple[str, float]]:
-        """Recognize text in given regions using batch inference with width bucketing"""
+        """Recognize text in given regions (batch inference with width bucketing)."""
         if not quads:
             return []
 
-        # Preprocess all crops
-        preprocessed = []
-        valid_indices = []
-        results = [("", 0.0)] * len(quads)  # Pre-fill with empty results
+        results = [("", 0.0)] * len(quads)
+        preprocessed, valid_indices = [], []
 
         for i, quad in enumerate(quads):
             crop = self._crop_quad(image, quad)
             if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
                 continue
-            tensor = self._preprocess_single(crop)
-            preprocessed.append(tensor)
+            preprocessed.append(self._preprocess_single(crop))
             valid_indices.append(i)
 
         if not preprocessed:
             return results
 
-        # Group by similar width to minimize padding impact
-        # Sort by width and process in buckets
-        width_indices = sorted(range(len(preprocessed)), key=lambda i: preprocessed[i].shape[2])
+        # Сортируем по ширине → минимум паддинга в бакете
+        width_order = sorted(range(len(preprocessed)), key=lambda i: preprocessed[i].shape[2])
+        BUCKET_SIZE = 8
 
-        BUCKET_SIZE = 4  # Process in small batches to minimize padding
-
-        for bucket_start in range(0, len(width_indices), BUCKET_SIZE):
-            bucket_indices = width_indices[bucket_start:bucket_start + BUCKET_SIZE]
-            bucket_tensors = [preprocessed[i] for i in bucket_indices]
-
-            # Create batch for this bucket
-            batch_tensor = self._create_batch(bucket_tensors)
-
-            # ONNX inference
-            logits_batch = self.session.run(None, {'input': batch_tensor})[0]
-
-            # Decode each result
-            for batch_idx, prep_idx in enumerate(bucket_indices):
-                orig_idx = valid_indices[prep_idx]
-                logits = logits_batch[batch_idx:batch_idx+1]
-                text, confidence = self._ctc_decode(logits)
-                results[orig_idx] = (text, confidence)
+        for start in range(0, len(width_order), BUCKET_SIZE):
+            bucket = width_order[start:start + BUCKET_SIZE]
+            batch = self._create_batch([preprocessed[i] for i in bucket])
+            logits = self.session.run(None, {self.input_name: batch})[0]
+            for bi, prep_idx in enumerate(bucket):
+                text, conf = self._decode(logits[bi:bi + 1])
+                results[valid_indices[prep_idx]] = (text, conf)
 
         return results
 
     def _preprocess_single(self, image: np.ndarray) -> np.ndarray:
-        """Preprocess single crop (without batch dim)"""
-        h, w = image.shape[:2]
-        scale = INPUT_HEIGHT / h
-        new_w = max(8, int(w * scale))
-
-        pil_img = Image.fromarray(image)
-        pil_img = pil_img.resize((new_w, INPUT_HEIGHT), Image.BILINEAR)
-
-        tensor = np.array(pil_img).transpose(2, 0, 1).astype(np.float32) / 255.0
-        return tensor  # (C, H, W)
+        """RGB-кроп (из пайплайна) → BGR (модель училась на cv2-BGR), ресайз H48 var-cap640, норма [-1,1]."""
+        img = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        h, w = img.shape[:2]
+        new_w = max(8, int(round(w * INPUT_HEIGHT / h)))
+        new_w = min(new_w, MAX_WIDTH)
+        img = cv2.resize(img, (new_w, INPUT_HEIGHT))
+        x = ((img.astype(np.float32) / 255.0 - 0.5) / 0.5).transpose(2, 0, 1)  # [-1,1], CHW
+        return x
 
     def _create_batch(self, tensors: List[np.ndarray]) -> np.ndarray:
-        """Create batch by padding to max width"""
+        """Паддинг по ширине до max-в-батче значением 1.0 (белый = (255/255-0.5)/0.5)."""
         max_w = max(t.shape[2] for t in tensors)
-
         batch = []
         for t in tensors:
             c, h, w = t.shape
             if w < max_w:
-                # Pad with zeros on the right
-                padded = np.zeros((c, h, max_w), dtype=np.float32)
+                padded = np.full((c, h, max_w), 1.0, dtype=np.float32)
                 padded[:, :, :w] = t
                 batch.append(padded)
             else:
                 batch.append(t)
-
-        return np.stack(batch, axis=0)  # (N, C, H, W)
+        return np.stack(batch, axis=0)
 
     def _crop_quad(self, image: np.ndarray, quad: np.ndarray) -> np.ndarray:
         quad = np.array(quad)
         x_min, x_max = int(quad[:, 0].min()), int(quad[:, 0].max())
         y_min, y_max = int(quad[:, 1].min()), int(quad[:, 1].max())
-
         h, w = image.shape[:2]
         x_min, y_min = max(0, x_min), max(0, y_min)
         x_max, y_max = min(w, x_max), min(h, y_max)
-
         return image[y_min:y_max, x_min:x_max]
 
     def _ctc_decode(self, logits: np.ndarray) -> Tuple[str, float]:
-        """CTC best path decoding"""
-        blank_idx = len(self.vocab)
+        """CTC best-path: argmax → схлопнуть повторы → убрать blank(0). Символ k → vocab[k-1]."""
+        exp = np.exp(logits - logits.max(axis=-1, keepdims=True))
+        probs = exp / exp.sum(axis=-1, keepdims=True)
+        confidence = float(probs.max(axis=-1).min())
 
-        # Softmax
-        exp_logits = np.exp(logits - logits.max(axis=-1, keepdims=True))
-        probs = exp_logits / exp_logits.sum(axis=-1, keepdims=True)
-
-        # Confidence
-        max_probs = probs.max(axis=-1)
-        confidence = float(max_probs.min())
-
-        # Decode
         pred_indices = logits.argmax(axis=-1)[0]  # (T,)
-
         chars = []
         for k, _ in groupby(pred_indices.tolist()):
-            if k != blank_idx and 0 <= k < len(self.vocab):
-                chars.append(self.vocab[k])
-
+            if k != 0 and 0 <= k - 1 < len(self.vocab):
+                chars.append(self.vocab[k - 1])
         return ''.join(chars), confidence

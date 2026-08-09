@@ -1,4 +1,4 @@
-"""Entry point for python -m ocr_skel.cli"""
+"""Entry point for `python -m ocr_skel`"""
 
 from .cli import main
 
