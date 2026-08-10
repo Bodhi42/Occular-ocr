@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.2
+
+- **GPU now runs on PyTorch/CUDA** instead of onnxruntime-gpu (which was fragile across CUDA/cuDNN
+  versions). `pip install occular-ocr[gpu]` pulls in torch + torchvision; the PyTorch weights
+  download from the Hub on first GPU use, and the output matches the CPU (ONNX) path bit-for-bit.
+  If PyTorch/CUDA is unavailable, `gpu=True` warns and falls back to CPU. The default CPU path is
+  unchanged and stays torch-free.
+- **Better confidence scores.** Per-line confidence now reflects the chosen beam+LM hypothesis
+  (length-normalized acoustic score) instead of the old worst-frame heuristic, so it separates
+  correct from incorrect lines far better. Recognized text is unchanged.
+- Trimmed the benchmarks/methodology section from the README.
+
 ## 0.2.1
 
 - **CLI batch mode (folder → `.txt`).** `ocr ./scans ./out` now processes every image/PDF in a

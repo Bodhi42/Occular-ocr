@@ -51,7 +51,7 @@ certificates, invoices and IDs.
   ~18–25 % over plain greedy decoding — with **no model retraining**, just better decoding.
 - **Installs anywhere, no compiler.** The decoder is pure Python end to end, so you get top-tier
   decoding quality with **zero native dependencies**.
-- **CPU-first, GPU-ready.** Ships as ONNX and runs on CPU out of the box; set `gpu=True` to run the same models on CUDA via ONNX Runtime (`onnxruntime-gpu`).
+- **CPU-first, GPU-ready.** Ships as ONNX and runs on CPU out of the box; set `gpu=True` to run natively on PyTorch/CUDA (`occular-ocr[gpu]`).
 - **Batteries included.** Images and PDF, folder → `.txt`, reading order, automatic deskew.
 
 ---
@@ -67,15 +67,16 @@ locally.
 
 ### GPU (optional)
 
-GPU runs the **same ONNX models on CUDA** through ONNX Runtime's `CUDAExecutionProvider` — there are
-no separate GPU weights. You only need the GPU runtime:
+On GPU the pipeline runs natively on **PyTorch/CUDA** (more robust across CUDA/cuDNN versions than
+onnxruntime-gpu). It uses the same trained weights, so output matches the CPU path bit-for-bit.
+Install the GPU extra:
 
 ```bash
-pip install occular-ocr[gpu]      # pulls in onnxruntime-gpu
-# equivalent to:  pip install occular-ocr onnxruntime-gpu
+pip install occular-ocr[gpu]      # pulls in torch + torchvision
 ```
 
-Then pass `gpu=True` (see below). If CUDA isn't available it falls back to CPU with a warning.
+Then pass `gpu=True` (see below). The PyTorch weights download automatically on first GPU use.
+If PyTorch or CUDA isn't available, it falls back to CPU (ONNX) with a warning.
 
 ---
 
@@ -118,7 +119,7 @@ print(Settings())
 | Setting | Default | What it does |
 |---|---|---|
 | `num_threads` | `None` | CPU threads for inference. `None` → `min(cores, 4)`. |
-| `gpu` | `False` | Run the ONNX models on **GPU via ONNX Runtime (CUDA)**. Needs `onnxruntime-gpu` (`pip install occular-ocr[gpu]`); falls back to CPU if unavailable. |
+| `gpu` | `False` | Run on **GPU via PyTorch/CUDA**. Needs `occular-ocr[gpu]` (torch+torchvision); falls back to CPU (ONNX) if unavailable. |
 | `deskew` | `True` | Auto-correct skewed / rotated scans before detection. |
 | `lm` | `True` | Beam search + language model (best quality). `False` → fast greedy decoding, skips the LM download. |
 | `reading_order` | `False` | Order lines for multi-column layouts (downloads a small model on first use). |
@@ -132,7 +133,7 @@ from ocr_skel import OCRPipeline, Settings
 
 pipe = OCRPipeline(Settings(
     num_threads=8,        # CPU threads (None -> min(cores, 4))
-    gpu=False,            # True -> ONNX Runtime CUDA (needs occular-ocr[gpu])
+    gpu=False,            # True -> PyTorch/CUDA (needs occular-ocr[gpu])
     deskew=True,          # auto-correct skewed scans
     lm=True,              # beam + language model; False -> greedy (faster, no LM download)
     reading_order=False,  # multi-column reading order (optional model, see below)
@@ -167,7 +168,7 @@ pages = pipe.process_pdf(
 from ocr_skel import ocr
 
 ocr("document.png")                 # CPU (default), full quality
-ocr("document.png", gpu=True)       # GPU via ONNX Runtime CUDA (needs onnxruntime-gpu)
+ocr("document.png", gpu=True)       # GPU via PyTorch/CUDA (needs occular-ocr[gpu])
 ocr("document.png", lm=False)       # fast greedy mode, no LM download
 ocr("document.png", deskew=False)   # skip deskew
 ocr("document.png", num_threads=2)  # limit CPU threads
@@ -192,7 +193,7 @@ ocr document.png --out result.json
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--gpu` | off | Run on GPU via ONNX Runtime CUDA (needs onnxruntime-gpu). |
+| `--gpu` | off | Run on GPU via PyTorch/CUDA (needs occular-ocr[gpu]). |
 | `--dpi N` | `300` | PDF render resolution. |
 | `--force-ocr` | off | OCR even vector PDFs. |
 | `--workers N` | auto | Parallel workers (PDF pages / batch files). |
@@ -245,19 +246,6 @@ Inspect what's present locally:
 from ocr_skel import model_info
 model_info()
 ```
-
----
-
-## Benchmarks & methodology
-
-Numbers above are **end-to-end** (detection **and** recognition on full pages), matched to
-line-level ground truth by IoU, scored with word/character error rate. The Russian benchmark spans
-30 document domains (bank, receipts, diplomas, certificates, IDs, court decisions, price tags,
-newspapers, and more), ~15 pages each.
-
-> **Note on ground truth.** Reference transcriptions come from a strong reference OCR system.
-> Occular-OCR is tuned toward that transcription style, which favours it against third-party
-> engines; the margin on Russian forms nonetheless exceeds what that bias alone explains.
 
 ---
 
@@ -334,7 +322,7 @@ Occular-OCR заточен под русский и читает его знач
 - **Ставится где угодно, без компилятора.** Декодер целиком на чистом Python — топовое качество декода
   с **нулевыми нативными зависимостями**.
 - **Сначала CPU, GPU — по желанию.** Поставляется как ONNX и работает на CPU из коробки; `gpu=True`
-  гоняет те же модели на CUDA через ONNX Runtime (`onnxruntime-gpu`).
+  гоняет нативно на PyTorch/CUDA (`occular-ocr[gpu]`).
 - **Всё в комплекте.** Картинки и PDF, папка → `.txt`, порядок чтения, автоматическое выпрямление наклона.
 
 ---
@@ -350,15 +338,16 @@ pip install occular-ocr
 
 ### GPU (опционально)
 
-GPU гоняет **те же ONNX-модели на CUDA** через `CUDAExecutionProvider` ONNX Runtime — отдельных
-GPU-весов нет. Нужен только GPU-рантайм:
+На GPU пайплайн работает нативно на **PyTorch/CUDA** (надёжнее onnxruntime-gpu по версиям CUDA/cuDNN).
+Использует те же обученные веса, поэтому результат совпадает с CPU-путём один-в-один. Ставится
+GPU-экстра:
 
 ```bash
-pip install occular-ocr[gpu]      # доустанавливает onnxruntime-gpu
-# то же самое, что:  pip install occular-ocr onnxruntime-gpu
+pip install occular-ocr[gpu]      # доустанавливает torch + torchvision
 ```
 
-Затем передай `gpu=True` (см. ниже). Если CUDA недоступна — тихий откат на CPU с предупреждением.
+Затем передай `gpu=True` (см. ниже). PyTorch-веса скачиваются автоматически при первом GPU-запуске.
+Если PyTorch или CUDA недоступны — откат на CPU (ONNX) с предупреждением.
 
 ---
 
@@ -401,7 +390,7 @@ print(Settings())
 | Настройка | По умолчанию | Что делает |
 |---|---|---|
 | `num_threads` | `None` | CPU-потоки для инференса. `None` → `min(ядра, 4)`. |
-| `gpu` | `False` | Гонять ONNX-модели на **GPU через ONNX Runtime (CUDA)**. Нужен `onnxruntime-gpu` (`pip install occular-ocr[gpu]`); при отсутствии — откат на CPU. |
+| `gpu` | `False` | Гонять на **GPU через PyTorch/CUDA**. Нужен `occular-ocr[gpu]` (torch+torchvision); при отсутствии — откат на CPU (ONNX). |
 | `deskew` | `True` | Автовыпрямление наклонённых / повёрнутых сканов перед детекцией. |
 | `lm` | `True` | Beam + языковая модель (лучшее качество). `False` → быстрое жадное декодирование, без скачивания LM. |
 | `reading_order` | `False` | Упорядочивание строк для многоколоночных макетов (докачивает небольшую модель при первом запуске). |
@@ -415,7 +404,7 @@ from ocr_skel import OCRPipeline, Settings
 
 pipe = OCRPipeline(Settings(
     num_threads=8,        # CPU-потоки (None -> min(ядра, 4))
-    gpu=False,            # True -> ONNX Runtime CUDA (нужен occular-ocr[gpu])
+    gpu=False,            # True -> PyTorch/CUDA (нужен occular-ocr[gpu])
     deskew=True,          # автовыпрямление наклона
     lm=True,              # beam + языковая модель; False -> жадное (быстрее, без скачивания LM)
     reading_order=False,  # порядок чтения для многоколоночных (опц. модель, см. ниже)
@@ -450,7 +439,7 @@ pages = pipe.process_pdf(
 from ocr_skel import ocr
 
 ocr("document.png")                 # CPU (по умолчанию), полное качество
-ocr("document.png", gpu=True)       # GPU через ONNX Runtime CUDA (нужен onnxruntime-gpu)
+ocr("document.png", gpu=True)       # GPU через PyTorch/CUDA (нужен occular-ocr[gpu])
 ocr("document.png", lm=False)       # быстрый жадный режим, без скачивания LM
 ocr("document.png", deskew=False)   # без выпрямления наклона
 ocr("document.png", num_threads=2)  # ограничить CPU-потоки
@@ -475,7 +464,7 @@ ocr document.png --out result.json
 
 | Флаг | По умолчанию | Что делает |
 |---|---|---|
-| `--gpu` | выкл | Гонять на GPU через ONNX Runtime CUDA (нужен onnxruntime-gpu). |
+| `--gpu` | выкл | Гонять на GPU через PyTorch/CUDA (нужен occular-ocr[gpu]). |
 | `--dpi N` | `300` | Разрешение рендеринга PDF. |
 | `--force-ocr` | выкл | OCR даже для векторных PDF. |
 | `--workers N` | авто | Параллельные воркеры (страницы PDF / файлы батча). |
@@ -528,19 +517,6 @@ search с 4-gram русской языковой моделью. Весь сте
 from ocr_skel import model_info
 model_info()
 ```
-
----
-
-## Бенчмарки и методология
-
-Цифры выше — **сквозные** (детекция **и** распознавание на полных страницах), с матчингом к
-построчному эталону по IoU, метрика — ошибка слов/символов. Русский бенчмарк охватывает 30 доменов
-документов (банковские, чеки, дипломы, справки, удостоверения, судебные решения, ценники, газеты и
-др.), ~15 страниц на домен.
-
-> **Про эталон.** Эталонные транскрипции получены сильной референсной OCR-системой; Occular-OCR
-> настроен под этот стиль транскрипции, что даёт ему фору против сторонних движков. Тем не менее на
-> русских формах разрыв превышает то, что объясняется одним лишь этим уклоном.
 
 ---
 

@@ -16,7 +16,7 @@ Occular OCR Package
     ocr document.pdf --workers 4
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 from typing import Union, List, Dict, Optional
 from pathlib import Path

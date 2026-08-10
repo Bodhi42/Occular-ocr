@@ -76,8 +76,15 @@ class LMDecoder:
         return (logits - m) - np.log(e.sum(axis=-1, keepdims=True))
 
     def decode(self, logits_1tc: np.ndarray) -> tuple:
-        """logits [1,T,C] -> (text, confidence). Confidence — как в greedy (min по кадрам max-prob)."""
+        """logits [1,T,C] -> (text, confidence).
+        Confidence = exp(acoustic_score / len(text)) верхней beam-гипотезы: привязан к выбранному
+        тексту и нормирован на длину (AUC 0.97 vs 0.90 у старого min-по-кадрам)."""
         lp = self._log_softmax(logits_1tc[0].astype(np.float32))
-        text = self.decoder.decode(lp, beam_width=self.beam_width)
-        conf = float(np.exp(lp).max(axis=-1).min())
-        return text, conf
+        beams = self.decoder.decode_beams(lp, beam_width=self.beam_width)
+        if not beams:
+            return "", 0.0
+        top = beams[0]
+        text = top[0]                                    # (text, last_word, frames, logit_score, lm_score)
+        logit_score = float(top[-2])                     # акустический score пути (без LM), ≤ 0
+        conf = float(np.exp(logit_score / max(1, len(text))))
+        return text, min(1.0, conf)

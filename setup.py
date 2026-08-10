@@ -6,7 +6,7 @@ _long = (_here / "README.md").read_text(encoding="utf-8") if (_here / "README.md
 
 setup(
     name="occular-ocr",
-    version="0.2.1",
+    version="0.2.2",
     description="State-of-the-art OCR for Russian documents, with a zero-compilation install.",
     long_description=_long,
     long_description_content_type="text/markdown",
@@ -24,7 +24,9 @@ setup(
         "pyctcdecode",       # beam-CTC (чистый Python)
     ],
     extras_require={
-        "gpu": ["onnxruntime-gpu"],
+        # GPU-путь = нативный PyTorch на CUDA (надёжнее onnxruntime-gpu).
+        # Ставит torch+torchvision; веса .pth качаются с HuggingFace при gpu=True.
+        "gpu": ["torch", "torchvision"],
     },
     entry_points={
         "console_scripts": [
