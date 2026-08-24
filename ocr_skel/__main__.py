@@ -1,6 +1,2 @@
-"""Entry point for `python -m ocr_skel`"""
-
-from .cli import main
-
-if __name__ == "__main__":
-    main()
+from occular.cli import main
+main()

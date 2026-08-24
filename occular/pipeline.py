@@ -40,7 +40,7 @@ class OCRPipeline:
             detector_kwargs: параметры для детектора
             recognizer_kwargs: параметры для распознавателя
             num_threads: число CPU-ядер для инференса (None = min(доступные, 4))
-            gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе фолбэк на CPU)
+            gpu: исполнять на GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu]; иначе фолбэк на CPU)
         """
         detector_kwargs = detector_kwargs or {}
         recognizer_kwargs = recognizer_kwargs or {}

@@ -22,9 +22,11 @@ class CRNNRecognizerONNX:
     """Text recognizer via ONNX Runtime (var-width, blank=0)."""
 
     def __init__(self, languages: List[str] = None, num_threads: int = 4, gpu: bool = False,
-                 lm: bool = True):
+                 lm: bool = True, onnx_file: str = "recognizer_svtr_fp32.onnx",
+                 charset_file: str = "recognizer_charset.txt"):
         self.languages = languages or ['ru', 'en']
         self.lm = bool(lm)          # beam-CTC + языковая модель (по умолчанию ВКЛ)
+        self._onnx_file = onnx_file  # вариант модели: русская (дефолт) или кириллическая-12
         self._lm_decoder = None
         self._lm_lock = threading.Lock()   # ленивая инициализация LM — потокобезопасно (общий инстанс у PDF-воркеров)
         self.session = None
@@ -32,7 +34,7 @@ class CRNNRecognizerONNX:
         self._device = None
 
         from .model_files import ensure_weight
-        charset_path = Path(ensure_weight("recognizer_charset.txt"))
+        charset_path = Path(ensure_weight(charset_file))
         # Charset: индекс 0 = CTC blank; символ для класса k = vocab[k-1] (как rec_data.Charset)
         self.vocab = charset_path.read_text(encoding='utf-8').split('\n')
         try: cv2.setNumThreads(max(1, int(num_threads)))  # OpenCV по умолч. берёт все ядра
@@ -49,7 +51,7 @@ class CRNNRecognizerONNX:
                           f"Откат на CPU (ONNX).")
 
         # CPU-путь (по умолчанию и как фолбэк): ONNX Runtime, только CPU.
-        onnx_path = Path(ensure_weight("recognizer_svtr_fp32.onnx"))
+        onnx_path = Path(ensure_weight(self._onnx_file))
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         sess_options.intra_op_num_threads = max(1, int(num_threads))
@@ -85,36 +87,48 @@ class CRNNRecognizerONNX:
             return self._ensure_lm().decode(logits_1tc)
         return self._ctc_decode(logits_1tc)
 
-    def recognize(self, image: np.ndarray, quads: List[np.ndarray]) -> List[Tuple[str, float]]:
-        """Recognize text in given regions (batch inference with width bucketing)."""
-        if not quads:
-            return []
-
-        results = [("", 0.0)] * len(quads)
+    def logits_per_line(self, image: np.ndarray, quads: List[np.ndarray]) -> List[np.ndarray]:
+        """Логиты по каждой строке (batch-инференс с бакетингом по ширине), выровнено к quads.
+        per_line[i] = [1,T,C] или None для пустого/нулевого кропа. Декод оставлен вызывающему —
+        так мультиязычный роутер может декодить каждую строку своей языковой моделью."""
+        per_line = [None] * len(quads)
         preprocessed, valid_indices = [], []
-
         for i, quad in enumerate(quads):
             crop = self._crop_quad(image, quad)
             if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
                 continue
             preprocessed.append(self._preprocess_single(crop))
             valid_indices.append(i)
-
         if not preprocessed:
-            return results
-
+            return per_line
         # Сортируем по ширине → минимум паддинга в бакете
         width_order = sorted(range(len(preprocessed)), key=lambda i: preprocessed[i].shape[2])
         BUCKET_SIZE = 8
-
         for start in range(0, len(width_order), BUCKET_SIZE):
             bucket = width_order[start:start + BUCKET_SIZE]
             batch = self._create_batch([preprocessed[i] for i in bucket])
             logits = self._infer(batch)
             for bi, prep_idx in enumerate(bucket):
-                text, conf = self._decode(logits[bi:bi + 1])
-                results[valid_indices[prep_idx]] = (text, conf)
+                per_line[valid_indices[prep_idx]] = logits[bi:bi + 1]
+        return per_line
 
+    def recognize(self, image: np.ndarray, quads: List[np.ndarray]) -> List[Tuple[str, float]]:
+        """Recognize text in given regions (batch inference with width bucketing)."""
+        if not quads:
+            return []
+        per_line = self.logits_per_line(image, quads)
+        valid = [i for i, lg in enumerate(per_line) if lg is not None]
+        results = [("", 0.0)] * len(quads)
+        if not valid:
+            return results
+        # Инференс всех строк уже сделан; декод всей страницы одним вызовом. Нативный декодер
+        # считает строки параллельно (GIL отпущен); на чистом Python это тот же цикл.
+        if self.lm:
+            decoded = self._ensure_lm().decode_many([per_line[i] for i in valid])
+        else:
+            decoded = [self._ctc_decode(per_line[i]) for i in valid]
+        for i, dec in zip(valid, decoded):
+            results[i] = dec
         return results
 
     def _preprocess_single(self, image: np.ndarray) -> np.ndarray:

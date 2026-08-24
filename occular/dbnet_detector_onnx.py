@@ -12,7 +12,6 @@ import cv2
 from typing import List
 from pathlib import Path
 import pyclipper
-from shapely.geometry import Polygon
 
 
 VAL = 1280                                                  # длинная сторона (как на валидации)

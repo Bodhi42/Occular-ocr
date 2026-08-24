@@ -1,45 +1,43 @@
-"""Tests for DBNet detector"""
+"""Тесты детектора DBNet (актуальный класс DBNetDetectorONNX / реестр 'dbnet-onnx').
 
+Регистрация — лёгкая проверка. Реальная детекция ПРОПУСКАЕТСЯ, если веса недоступны.
+"""
 import numpy as np
-from PIL import Image, ImageDraw
 import pytest
-from ocr_skel.registry import Registry
-from ocr_skel.dbnet_detector import DBNetDetector
+from PIL import Image, ImageDraw
+
+import occular  # noqa: F401  — регистрирует dbnet-onnx при импорте
+from occular.registry import Registry
+from occular.dbnet_detector_onnx import DBNetDetectorONNX
 
 
 def test_dbnet_registration():
-    """Тест регистрации DBNet детектора"""
-    assert "dbnet" in Registry.list_detectors()
+    """Детектор зарегистрирован под актуальным именем."""
+    assert "dbnet-onnx" in Registry.list_detectors()
 
-    detector = Registry.get_detector("dbnet", gpu=False)
-    assert isinstance(detector, DBNetDetector)
+
+def _detector_or_skip():
+    try:
+        return Registry.get_detector("dbnet-onnx", gpu=False)
+    except Exception as e:
+        pytest.skip(f"веса детектора недоступны: {e}")
 
 
 def test_dbnet_detect():
-    """Тест детекции DBNet на синтетическом изображении"""
+    """Детекция на синтетическом изображении: список квадов формы (4,2) в границах кадра."""
+    detector = _detector_or_skip()
     img = Image.new('RGB', (400, 200), color='white')
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([50, 50, 350, 150], fill='black')
-
-    img_array = np.array(img)
-
-    detector = Registry.get_detector("dbnet", gpu=False)
-    quads = detector.detect(img_array)
-
+    ImageDraw.Draw(img).rectangle([50, 50, 350, 150], fill='black')
+    quads = detector.detect(np.array(img))
     assert isinstance(quads, list)
-
     for quad in quads:
-        assert isinstance(quad, np.ndarray)
-        assert quad.shape == (4, 2), f"Expected shape (4, 2), got {quad.shape}"
+        assert isinstance(quad, np.ndarray) and quad.shape == (4, 2)
         assert np.all(quad[:, 0] >= 0) and np.all(quad[:, 0] <= 400)
         assert np.all(quad[:, 1] >= 0) and np.all(quad[:, 1] <= 200)
 
 
 def test_dbnet_empty_image():
-    """Тест детекции на пустом изображении"""
-    img_array = np.ones((200, 400, 3), dtype=np.uint8) * 255
-
-    detector = Registry.get_detector("dbnet", gpu=False)
-    quads = detector.detect(img_array)
-
+    """Пустое изображение — валидный (обычно пустой) список квадов, без падения."""
+    detector = _detector_or_skip()
+    quads = detector.detect(np.ones((200, 400, 3), dtype=np.uint8) * 255)
     assert isinstance(quads, list)

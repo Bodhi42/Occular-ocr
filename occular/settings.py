@@ -1,6 +1,6 @@
 """Единые настройки Occular-OCR — один объект на всё.
 
-    from ocr_skel import Settings, OCRPipeline
+    from occular import Settings, OCRPipeline
 
     cfg = Settings(num_threads=8, deskew=True, reading_order=False)
     p = OCRPipeline(cfg)

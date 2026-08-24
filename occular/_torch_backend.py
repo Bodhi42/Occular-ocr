@@ -47,22 +47,30 @@ def _weight(rel: str) -> str:
     return ensure_weight(rel)
 
 
+def _safe_load(path):
+    """Загрузка .pth с weights_only=True (безопасно для недоверенных checkpoint'ов);
+    фолбэк на обычную загрузку только для torch < 1.13, где аргумента ещё нет."""
+    import torch
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
 def load_recognizer(nclass: int, device="cuda"):
     """SVTR-t на CUDA (fp32, eval). nclass = len(charset)+1 (blank)."""
-    import torch
     from ._svtr import build_svtr
     m = build_svtr(nclass, "svtr_t", 48, 640, "none")
-    sd = torch.load(_weight(REC_PTH), map_location="cpu")
+    sd = _safe_load(_weight(REC_PTH))
     m.load_state_dict(sd["model"] if "model" in sd else sd)
     return m.to(device).eval()
 
 
 def load_detector(device="cuda"):
     """DBNet(resnet50, db, inner=256) на CUDA (fp32, eval)."""
-    import torch
     from ._dbnet_model import DBNet
     m = DBNet(backbone="resnet50", head="db", inner=256)
-    sd = torch.load(_weight(DET_PTH), map_location="cpu")
+    sd = _safe_load(_weight(DET_PTH))
     m.load_state_dict(sd["model"] if "model" in sd else sd)
     return m.to(device).eval()
 

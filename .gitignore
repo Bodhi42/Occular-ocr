@@ -32,7 +32,13 @@ venv/
 out*.json
 
 # Model weights — downloaded from Hugging Face on first use, never committed
+occular/weights/
 ocr_skel/weights/
 *.onnx
 *.pth
 *.npz
+*.pt
+*.pkl
+
+# GitHub Actions — добавлять через веб-UI (OAuth-токен без scope workflow)
+.github/

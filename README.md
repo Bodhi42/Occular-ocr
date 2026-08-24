@@ -83,7 +83,7 @@ If PyTorch or CUDA isn't available, it falls back to CPU (ONNX) with a warning.
 ## Quick start
 
 ```python
-from ocr_skel import ocr
+from occular import ocr
 
 text = ocr("document.png")        # an image, or a "scan.pdf"
 print(text)
@@ -92,7 +92,7 @@ print(text)
 Line-level output with coordinates and confidence:
 
 ```python
-from ocr_skel import ocr_detailed
+from occular import ocr_detailed
 
 for line in ocr_detailed("document.png"):
     print(line["text"], round(line["confidence"], 2), line["quad"])
@@ -112,7 +112,7 @@ All behaviour is controlled by `Settings` (or the equivalent keyword arguments o
 current defaults at any time:
 
 ```python
-from ocr_skel import Settings
+from occular import Settings
 print(Settings())
 ```
 
@@ -129,7 +129,7 @@ print(Settings())
 ### Full pipeline with every setting
 
 ```python
-from ocr_skel import OCRPipeline, Settings
+from occular import OCRPipeline, Settings
 
 pipe = OCRPipeline(Settings(
     num_threads=8,        # CPU threads (None -> min(cores, 4))
@@ -165,7 +165,7 @@ pages = pipe.process_pdf(
 ### One-liners
 
 ```python
-from ocr_skel import ocr
+from occular import ocr
 
 ocr("document.png")                 # CPU (default), full quality
 ocr("document.png", gpu=True)       # GPU via PyTorch/CUDA (needs occular-ocr[gpu])
@@ -189,7 +189,7 @@ ocr ./scans                    # .txt next to the source files
 ocr document.png --out result.json
 ```
 
-`ocr` is installed as a console command; `python -m ocr_skel <args>` is equivalent.
+`ocr` is installed as a console command; `python -m occular <args>` is equivalent.
 
 | Flag | Default | What it does |
 |---|---|---|
@@ -205,7 +205,7 @@ ocr document.png --out result.json
 Off by default. The model downloads once from the Hub.
 
 ```python
-from ocr_skel import download_reading_order, OCRPipeline, Settings, model_info
+from occular import download_reading_order, OCRPipeline, Settings, model_info
 
 download_reading_order()                       # one-time download
 pipe = OCRPipeline(Settings(reading_order=True))
@@ -214,6 +214,36 @@ model_info()                                   # show which weights are present 
 ```
 
 > 📓 Everything above is also in a runnable notebook: **[`examples.ipynb`](examples.ipynb)**.
+
+---
+
+## Tables
+
+`TableRecognizer` finds tables on a page and reconstructs their structure — the row/column grid plus
+merged cells (`colspan`/`rowspan`):
+
+```python
+import cv2
+from occular import TableRecognizer
+
+tr = TableRecognizer()
+page = cv2.imread("report.png")
+for t in tr(page):
+    x0, y0, x1, y1, conf = t["bbox"]
+    print(f"table at {(x0, y0, x1, y1)}: {len(t['rows'])} rows × {len(t['cols'])} cols, "
+          f"{len(t['cells'])} cells")
+```
+
+Detection and the grid run on ONNX (CPU, no extra dependencies). Merged-cell reconstruction uses a
+small model on CPU when PyTorch is installed (`pip install occular-ocr[gpu]`); without it, you still
+get the row/column grid.
+
+## Optional: native decoder (faster)
+
+The decoding stack is pure Python by default. An optional Rust module, `occular-decode`, is a
+drop-in accelerator: **byte-identical output**, but 5–13× faster per line and 17–48× per page, with
+lower memory. Once installed it is picked up automatically (pure Python stays as the fallback).
+Build/install instructions are in [`native/README.md`](native/README.md).
 
 ---
 
@@ -237,13 +267,14 @@ Weights are fetched automatically on first use and cached:
 |---|---|
 | DBNet text detector | finds text lines on the page |
 | SVTR recognizer | reads text inside each line |
+| Table detector + structure *(optional)* | tables → row/column grid + merged cells |
 | Language model | rescoring for the beam decoder |
 | Reading-order model *(optional)* | orders lines for multi-column layouts |
 
 Inspect what's present locally:
 
 ```python
-from ocr_skel import model_info
+from occular import model_info
 model_info()
 ```
 
@@ -354,7 +385,7 @@ pip install occular-ocr[gpu]      # доустанавливает torch + torch
 ## Быстрый старт
 
 ```python
-from ocr_skel import ocr
+from occular import ocr
 
 text = ocr("document.png")        # картинка или "scan.pdf"
 print(text)
@@ -363,7 +394,7 @@ print(text)
 Построчный вывод с координатами и confidence:
 
 ```python
-from ocr_skel import ocr_detailed
+from occular import ocr_detailed
 
 for line in ocr_detailed("document.png"):
     print(line["text"], round(line["confidence"], 2), line["quad"])
@@ -383,7 +414,7 @@ ocr ./scans ./out          # пишет ./out/<имя>.txt для каждого
 текущие дефолты можно в любой момент:
 
 ```python
-from ocr_skel import Settings
+from occular import Settings
 print(Settings())
 ```
 
@@ -400,7 +431,7 @@ print(Settings())
 ### Пайплайн со всеми настройками
 
 ```python
-from ocr_skel import OCRPipeline, Settings
+from occular import OCRPipeline, Settings
 
 pipe = OCRPipeline(Settings(
     num_threads=8,        # CPU-потоки (None -> min(ядра, 4))
@@ -436,7 +467,7 @@ pages = pipe.process_pdf(
 ### Однострочники
 
 ```python
-from ocr_skel import ocr
+from occular import ocr
 
 ocr("document.png")                 # CPU (по умолчанию), полное качество
 ocr("document.png", gpu=True)       # GPU через PyTorch/CUDA (нужен occular-ocr[gpu])
@@ -460,7 +491,7 @@ ocr ./scans                    # .txt рядом с исходными файл�
 ocr document.png --out result.json
 ```
 
-`ocr` ставится как консольная команда; `python -m ocr_skel <аргументы>` — эквивалент.
+`ocr` ставится как консольная команда; `python -m occular <аргументы>` — эквивалент.
 
 | Флаг | По умолчанию | Что делает |
 |---|---|---|
@@ -476,7 +507,7 @@ ocr document.png --out result.json
 По умолчанию выключено. Модель скачивается один раз.
 
 ```python
-from ocr_skel import download_reading_order, OCRPipeline, Settings, model_info
+from occular import download_reading_order, OCRPipeline, Settings, model_info
 
 download_reading_order()                       # разовая докачка
 pipe = OCRPipeline(Settings(reading_order=True))
@@ -485,6 +516,36 @@ model_info()                                   # показать, какие в
 ```
 
 > 📓 Всё вышеперечисленное есть и в исполняемом ноутбуке: **[`examples.ipynb`](examples.ipynb)**.
+
+---
+
+## Таблицы
+
+`TableRecognizer` находит таблицы на странице и восстанавливает их структуру — сетку строк/столбцов
+и объединённые ячейки (`colspan`/`rowspan`):
+
+```python
+import cv2
+from occular import TableRecognizer
+
+tr = TableRecognizer()
+page = cv2.imread("report.png")
+for t in tr(page):
+    x0, y0, x1, y1, conf = t["bbox"]
+    print(f"таблица {(x0, y0, x1, y1)}: строк {len(t['rows'])} × столбцов {len(t['cols'])}, "
+          f"ячеек {len(t['cells'])}")
+```
+
+Детекция и сетка работают на ONNX (CPU, без доп. зависимостей). Объединённые ячейки восстанавливает
+небольшая модель на CPU, если установлен PyTorch (`pip install occular-ocr[gpu]`); без него доступна
+сетка строк/столбцов.
+
+## Опционально: нативный декодер (быстрее)
+
+Стек декодирования по умолчанию на чистом Python. Опциональный Rust-модуль `occular-decode` —
+ускоритель без правок кода: **результат байт-в-байт тот же**, но декод в 5–13 раз быстрее на строку
+и в 17–48 раз на страницу, при меньшем расходе памяти. После установки подхватывается автоматически
+(чистый Python остаётся фолбэком). Установка/сборка — в [`native/README.md`](native/README.md).
 
 ---
 
@@ -508,13 +569,14 @@ search с 4-gram русской языковой моделью. Весь сте
 |---|---|
 | DBNet-детектор текста | находит строки текста на странице |
 | SVTR-распознаватель | читает текст внутри каждой строки |
+| Детектор + структура таблиц *(опц.)* | таблицы → сетка строк/столбцов + объединённые ячейки |
 | Языковая модель | rescoring для beam-декодера |
 | Модель порядка чтения *(опц.)* | упорядочивает строки для многоколоночных макетов |
 
 Посмотреть, что есть локально:
 
 ```python
-from ocr_skel import model_info
+from occular import model_info
 model_info()
 ```
 

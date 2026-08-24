@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+- **Package renamed `ocr_skel` → `occular`.** Import `occular` now (`from occular import ocr`).
+  The old `ocr_skel` name keeps working as a deprecated alias, so existing code doesn't break.
+- **Table recognition (new `TableRecognizer`).** Detects tables on a page and reconstructs their
+  structure — the row/column grid plus merged cells (colspan/rowspan). Detection and the grid run
+  on ONNX (CPU, torch-free); merged-cell reconstruction uses a small PyTorch model on CPU when
+  `torch` is installed, and otherwise falls back to grid-only. See `occular.tables.TableRecognizer`.
+- **Optional native (Rust) decoder.** An optional `occular-decode` module accelerates beam+LM
+  decoding 5–13× per line / 17–48× per page with **byte-identical** output; picked up automatically
+  when installed, pure Python otherwise. See `native/`.
+- Weights continue to download from the Hub on first use (not bundled in the wheel);
+  `model_info()` lists what's present locally.
+
 ## 0.2.2
 
 - **GPU now runs on PyTorch/CUDA** instead of onnxruntime-gpu (which was fragile across CUDA/cuDNN
@@ -42,7 +56,7 @@
   reading-order model downloads only when enabled.
 - **CPU thread fix:** inference threads are bounded (`num_threads`, default 4) instead of grabbing
   every core, so batch/parallel runs no longer saturate the machine.
-- **Lazy ONNX components:** `import ocr_skel` succeeds without heavy optional dependencies present.
+- **Lazy ONNX components:** `import occular` succeeds without heavy optional dependencies present.
 
 ## 0.1.0
 

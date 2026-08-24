@@ -1,6 +1,6 @@
 """DBNet (ResNet50 backbone) — PyTorch-описание детектора для GPU-бэкенда.
 Совпадает 1-в-1 с архитектурой, из которой экспортирован detector_dbnet_fp32.onnx
-(export_surya_onnx: DBNet(backbone='resnet50', head='db', inner=256), без DCN/ASF).
+(DBNet(backbone='resnet50', head='db', inner=256), без DCN/ASF).
 Backbone создаётся БЕЗ ImageNet-весов (weights=None) — их всё равно перезаписывает наш чекпоинт.
 Используется ТОЛЬКО при gpu=True; CPU-путь работает на ONNX без torch/torchvision."""
 import torch, torch.nn as nn, torch.nn.functional as F

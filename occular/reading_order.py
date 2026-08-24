@@ -5,7 +5,7 @@
 (порядок региона, затем сверху-вниз внутри региона) — это правильно упорядочивает
 многоколоночные страницы (газеты/научные тексты), чего простая сортировка по Y не может.
 
-Веса не входят в комплект (большие) — качаются: from ocr_skel import download_reading_order.
+Веса не входят в комплект (большие) — качаются: from occular import download_reading_order.
 Формат ONNX: encoder.onnx (картинка→memory) + decoder.onnx (шаг генерации, фикс L=140).
 """
 from pathlib import Path
@@ -30,7 +30,7 @@ class ReadingOrderModel:
         if not enc.exists() or not dec.exists():
             raise FileNotFoundError(
                 f"Модель порядка чтения не найдена в {_RO_DIR}.\n"
-                "Скачайте её:  from ocr_skel import download_reading_order; download_reading_order()"
+                "Скачайте её:  from occular import download_reading_order; download_reading_order()"
             )
         so = ort.SessionOptions()
         so.intra_op_num_threads = max(1, int(num_threads))

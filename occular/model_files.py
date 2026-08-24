@@ -2,11 +2,12 @@
 Где лежат модели Occular-OCR — простыми словами.
 
 Для чайников (1 строка):
-    from ocr_skel import model_info
+    from occular import model_info
     model_info()          # покажет все модели, их файлы, размер и статус
 
-Все модели лежат в ОДНОЙ папке: ocr_skel/weights/
-  • Детектор и распознаватель — в комплекте (ONNX, всегда на месте).
+Веса берутся так: сначала локальный файл в occular/weights/ (если положен), иначе — загрузка
+с HuggingFace в кэш. В sdist/wheel сами веса НЕ упакованы (MANIFEST.in исключает *.onnx/*.pth).
+  • Детектор и распознаватель — ONNX FP32, качаются с HuggingFace при первом запуске (или локально).
   • Порядок чтения (layout) — опционально, качается с HuggingFace, по умолчанию ВЫКЛ.
 """
 from pathlib import Path
@@ -19,10 +20,17 @@ READING_ORDER_DIR = WEIGHTS_DIR / "reading_order"        # сюда качает
 # Локальный файл в weights/ (если есть) имеет приоритет; иначе качается с HF в кэш.
 WEIGHTS_HF_REPO = "Shivin11/occular-ocr"
 READING_ORDER_HF_REPO = WEIGHTS_HF_REPO                  # reading_order/encoder.onnx, decoder.onnx
+# Закрепление версии весов для воспроизводимости: HF commit SHA релиза. None = ветка по умолчанию
+# (последняя ревизия). Для production выставьте конкретный commit, чтобы веса не менялись со временем.
+WEIGHTS_REVISION = None
+# Переопределение через окружение (не редактируя пакет): OCCULAR_WEIGHTS_REVISION=<sha>
+import os as _os
+WEIGHTS_REVISION = _os.environ.get("OCCULAR_WEIGHTS_REVISION", WEIGHTS_REVISION)
 
 
 def ensure_weight(rel_path: str) -> str:
-    """Путь к файлу веса: сначала локально в weights/, иначе качаем с HF (WEIGHTS_HF_REPO) в кэш."""
+    """Путь к файлу веса: сначала локально в weights/, иначе качаем с HF (WEIGHTS_HF_REPO) в кэш.
+    Ревизия закрепляется через WEIGHTS_REVISION (commit SHA) для воспроизводимости."""
     local = WEIGHTS_DIR / rel_path
     if local.exists():
         return str(local)
@@ -33,23 +41,45 @@ def ensure_weight(rel_path: str) -> str:
             f"Веса '{rel_path}' нет локально, а huggingface_hub не установлен. "
             f"pip install huggingface_hub  (или положите файл в {local})"
         )
-    return hf_hub_download(WEIGHTS_HF_REPO, rel_path)
+    return hf_hub_download(WEIGHTS_HF_REPO, rel_path, revision=WEIGHTS_REVISION)
 
 # Языковая модель для beam-CTC (декод по умолчанию). Качается с HF в кэш при первом запуске
 # (или берётся из папки OCCULAR_LM_DIR с файлами compact_lm.npz + unigrams.txt).
-LM_HF_REPO = "Shivin11/occular-lm-ru"   # n-gram LM + униграммы (beam-декодер)
+LM_HF_REPO = "Shivin11/occular-lm-ru"   # n-gram LM + униграммы (beam-декодер, русская модель ru/en)
+
+
+NPZ_NAME = "compact_lm.npz"
+UNI_NAME = "unigrams.txt"
 
 # Реестр: человекочитаемое имя -> файлы + описание + обязательна ли
 MODELS = {
     "Детектор текста (находит строки на странице)": {
         "files": ["detector_dbnet_fp32.onnx"],
-        "desc": "Детектор текста, ONNX FP32 — в комплекте",
+        "desc": "Детектор текста, ONNX FP32 — локально в weights/ или с HuggingFace",
         "required": True,
     },
     "Распознаватель (читает текст в строках)": {
         "files": ["recognizer_svtr_fp32.onnx", "recognizer_charset.txt"],
-        "desc": "Распознаватель, ONNX FP32 — в комплекте",
+        "desc": "Распознаватель, ONNX FP32 — локально в weights/ или с HuggingFace",
         "required": True,
+    },
+    "Детектор таблиц (опционально)": {
+        "files": ["table_detect_v3_fp32.onnx"],
+        "desc": "Находит таблицы на странице (карта таблица/фон → рамки), ONNX FP32 — для TableRecognizer; "
+                "локально в weights/ или с HuggingFace",
+        "required": False,
+    },
+    "Структура таблиц: split (ONNX, опц.)": {
+        "files": ["table_struct_split_v2_fp32.onnx"],
+        "desc": "Сетка строк/столбцов таблицы, ONNX FP32 (без объединённых ячеек) — фолбэк без torch; "
+                "локально в weights/ или с HuggingFace",
+        "required": False,
+    },
+    "Структура таблиц: split+merge (torch CPU, опц.)": {
+        "files": ["table_struct_split_merge_v2.pt"],
+        "desc": "Полная структура таблицы с объединёнными ячейками (colspan/rowspan) — PyTorch на CPU "
+                "(нужен пакет torch); локально в weights/ или с HuggingFace",
+        "required": False,
     },
     "Порядок чтения / layout (опционально)": {
         "files": ["reading_order/encoder.onnx", "reading_order/decoder.onnx"],
@@ -86,7 +116,7 @@ def model_info():
             print(f"    └─ {f}")
     print("-" * 78)
     print("Порядок чтения выключен по умолчанию. Включить: OCRPipeline(reading_order=True)")
-    print("Скачать порядок чтения:  from ocr_skel import download_reading_order; download_reading_order()\n")
+    print("Скачать порядок чтения:  from occular import download_reading_order; download_reading_order()\n")
 
 
 def reading_order_ready() -> bool:
@@ -95,7 +125,7 @@ def reading_order_ready() -> bool:
 
 
 def download_reading_order():
-    """Скачать опциональную модель порядка чтения (layout) с HuggingFace в ocr_skel/weights/reading_order/."""
+    """Скачать опциональную модель порядка чтения (layout) с HuggingFace в occular/weights/reading_order/."""
     if reading_order_ready():
         print(f"✅ Уже скачана: {READING_ORDER_DIR}")
         return str(READING_ORDER_DIR)
@@ -109,7 +139,7 @@ def download_reading_order():
     # в репо файлы плоские (reading_order_*.onnx) — раскладываем в weights/reading_order/{encoder,decoder}.onnx
     for repo_name, local_name in [("reading_order_encoder.onnx", "encoder.onnx"),
                                   ("reading_order_decoder.onnx", "decoder.onnx")]:
-        p = hf_hub_download(READING_ORDER_HF_REPO, repo_name)
+        p = hf_hub_download(READING_ORDER_HF_REPO, repo_name, revision=WEIGHTS_REVISION)
         shutil.copy(p, READING_ORDER_DIR / local_name)
     print(f"✅ Готово: {READING_ORDER_DIR}")
     return str(READING_ORDER_DIR)

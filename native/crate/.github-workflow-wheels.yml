@@ -1,0 +1,72 @@
+# Заготовка CI: собирает колёса под все платформы, чтобы пользователю не нужен был компилятор.
+# Положить в репозиторий как .github/workflows/wheels.yml
+#
+# На выходе — по одному abi3-колесу на платформу (покрывает Python 3.8+ сразу):
+#   manylinux x86_64, manylinux aarch64, musllinux x86_64,
+#   macOS x86_64, macOS arm64, Windows x86_64
+# плюс sdist. Если под чью-то экзотическую платформу колеса нет, pip поставит sdist,
+# сборка упадёт — и occular-ocr просто продолжит работать на чистом Python
+# (см. _build_native в decoder_lm.py).
+
+name: wheels
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.platform.runner }} · ${{ matrix.platform.target }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-latest,  target: x86_64,  manylinux: auto }
+          - { runner: ubuntu-latest,  target: aarch64, manylinux: auto }
+          - { runner: ubuntu-latest,  target: x86_64,  manylinux: musllinux_1_2 }
+          - { runner: macos-13,       target: x86_64 }
+          - { runner: macos-14,       target: aarch64 }
+          - { runner: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux || 'auto' }}
+          args: --release --out dist
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}-${{ matrix.platform.manylinux || 'auto' }}
+          path: dist
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+  publish:
+    needs: [build, sdist]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    environment: pypi
+    permissions:
+      id-token: write        # доверенная публикация, без токена в секретах
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - uses: pypa/gh-action-pypi-publish@release/v1
