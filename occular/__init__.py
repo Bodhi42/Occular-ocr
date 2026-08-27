@@ -16,7 +16,7 @@ Occular OCR Package
     ocr document.pdf --workers 4
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 import os
 from typing import Union, List, Dict, Optional
@@ -35,8 +35,11 @@ from .settings import Settings
 # Библиотека CPU-only ONNX.
 from .dbnet_detector_onnx import DBNetDetectorONNX
 from .recognizer_onnx import CRNNRecognizerONNX
+from .multilingual import MultilingualRecognizer, ALL_LANGS, CYR12_LANGS
 Registry.register_detector("dbnet-onnx", DBNetDetectorONNX)
 Registry.register_recognizer("crnn-onnx", CRNNRecognizerONNX)
+# Мультиязычный роутер (русская ru/en + 12 кир-языков), выбирается через ocr(..., languages=[...]).
+Registry.register_recognizer("multilingual", MultilingualRecognizer)
 
 
 def TableRecognizer(*args, **kwargs):
@@ -55,16 +58,32 @@ def _ensure_registered():
 # Простой API для чайников
 # ============================================================================
 
-def _build_pipeline(deskew, lm, num_threads, gpu, reading_order=False):
-    """Собрать конвейер с русским распознавателем (ru/en) по умолчанию."""
+def _normalize_languages(languages):
+    """None/[] → русская модель по умолчанию (быстрый путь, обратная совместимость).
+    Непустой список или 'auto' → мультиязычный роутер; вернуть (recognizer_name, recognizer_kwargs)."""
+    if not languages:
+        return "crnn-onnx", None
+    if isinstance(languages, str):
+        if languages.lower() == "auto":
+            return "multilingual", {"languages": None}     # авто-роутинг среди всех 14 языков
+        languages = [languages]
+    return "multilingual", {"languages": list(languages)}
+
+
+def _build_pipeline(deskew, lm, num_threads, gpu, reading_order=False, languages=None):
+    """Собрать конвейер. languages=None → русский распознаватель (ru/en) по умолчанию;
+    список языков или 'auto' → мультиязычный роутер (русская + 12 кир-языков)."""
     _ensure_registered()
-    return _OCRPipelineBase(detector_name="dbnet-onnx", recognizer_name="crnn-onnx",
+    rec_name, rec_kwargs = _normalize_languages(languages)
+    return _OCRPipelineBase(detector_name="dbnet-onnx", recognizer_name=rec_name,
+                            recognizer_kwargs=rec_kwargs,
                             deskew=deskew, reading_order=reading_order, lm=lm,
                             num_threads=num_threads, gpu=gpu)
 
 
 def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
-        num_threads: Optional[int] = None, gpu: bool = False) -> Union[str, List[str]]:
+        num_threads: Optional[int] = None, gpu: bool = False,
+        languages=None) -> Union[str, List[str]]:
     """
     Распознать текст из изображения или PDF.
 
@@ -74,6 +93,10 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         lm: beam-CTC + языковая модель для декодирования (по умолчанию True; False = быстрый greedy)
         num_threads: число CPU-ядер (None = min(доступные, 4))
         gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
+        languages: язык(и) текста. None (по умолчанию) — русская модель (ru/en). Список кодов —
+            мультиязычный роутер: один кир-язык (напр. ['uk']) читается им, несколько (напр.
+            ['ru','kk','uk']) — построчным определением языка. 'auto' — авто среди всех 14.
+            Кир-языки: ba be bg cv kk ky mk mn sr tg tt uk.
 
     Returns:
         Для изображения: строка с распознанным текстом
@@ -81,11 +104,12 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
 
     Example:
         >>> from occular import ocr
-        >>> text = ocr("photo.png")
+        >>> text = ocr("photo.png")                 # русский/английский
+        >>> text = ocr("doc_uk.png", languages=["uk"])   # украинский
         >>> print(text)
         Привет мир
     """
-    pipeline = _build_pipeline(deskew, lm, num_threads, gpu)
+    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages)
 
     path = Path(file_path)
     if path.suffix.lower() == '.pdf':
@@ -106,7 +130,8 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
 
 
 def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
-                 num_threads: Optional[int] = None, gpu: bool = False) -> List[Dict]:
+                 num_threads: Optional[int] = None, gpu: bool = False,
+                 languages=None) -> List[Dict]:
     """
     Распознать текст с полной информацией (координаты, confidence).
 
@@ -116,6 +141,8 @@ def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
         lm: beam-CTC + языковая модель для декодирования (по умолчанию True; False = быстрый greedy)
         num_threads: число CPU-ядер (None = min(доступные, 4))
         gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
+        languages: язык(и) текста (см. ocr()). None — русская модель (ru/en); список кодов или
+            'auto' — мультиязычный роутер (русская + 12 кир-языков).
 
     Returns:
         Список словарей {"quad": [...], "text": str, "confidence": float}
@@ -126,7 +153,7 @@ def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
         >>> for r in results:
         ...     print(f"{r['text']} ({r['confidence']:.2f})")
     """
-    pipeline = _build_pipeline(deskew, lm, num_threads, gpu)
+    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages)
 
     path = Path(file_path)
     if path.suffix.lower() == '.pdf':
@@ -161,7 +188,8 @@ class OCRPipeline:
         num_threads: Optional[int] = None,
         gpu: bool = False,
         detector: Optional[str] = None,
-        recognizer: Optional[str] = None
+        recognizer: Optional[str] = None,
+        languages=None
     ):
         _ensure_registered()
 
@@ -169,7 +197,7 @@ class OCRPipeline:
         if settings is None:
             settings = Settings(deskew=deskew, reading_order=reading_order, lm=lm,
                                 num_threads=num_threads, gpu=gpu,
-                                detector=detector, recognizer=recognizer)
+                                detector=detector, recognizer=recognizer, languages=languages)
         self.settings = settings
         s = settings
 
@@ -183,11 +211,17 @@ class OCRPipeline:
             )
 
         detector = s.detector or "dbnet-onnx"
-        recognizer = s.recognizer or "crnn-onnx"
+        # Явно заданный recognizer имеет приоритет; иначе выбираем по languages
+        # (None → русская модель ru/en; список/'auto' → мультиязычный роутер).
+        if s.recognizer:
+            recognizer, rec_kwargs = s.recognizer, None
+        else:
+            recognizer, rec_kwargs = _normalize_languages(s.languages)
 
         self._pipeline = _OCRPipelineBase(
             detector_name=detector,
             recognizer_name=recognizer,
+            recognizer_kwargs=rec_kwargs,
             deskew=s.deskew,
             reading_order=s.reading_order,
             lm=s.lm,

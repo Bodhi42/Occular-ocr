@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.2
+
+- **Multilingual recognition (12 more languages).** Pass `languages=` to read 12 additional
+  Cyrillic-script languages beyond the default Russian/English: Bashkir, Belarusian, Bulgarian,
+  Chuvash, Kazakh, Kyrgyz, Macedonian, Mongolian, Serbian, Tajik, Tatar, Ukrainian.
+  `ocr(img, languages=["uk"])` for a single language (fastest), `languages=["ru", "kk"]` to detect
+  the language per line, or `languages="auto"` to auto-detect across all supported languages.
+  Also on `OCRPipeline(...)`, `Settings(languages=...)`, and the CLI (`--languages` / `--lang`).
+- Each language decodes with its own tuned settings (a per-language language model where it helps,
+  fast greedy decoding where it doesn't). The recognizer and only the requested language's weights
+  download from the Hub on first use. More languages will be added in future minor releases.
+- The default Russian/English path is unchanged — same model, same output, no extra downloads.
+
 ## 0.3.1
 
 - **`--json` output is now clean JSON.** Model-loading progress messages ("Loaded ...", language-model

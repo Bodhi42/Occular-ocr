@@ -1,0 +1,82 @@
+{
+  "ba": {
+    "decode": "beam+lm",
+    "corpus": "core",
+    "alpha": 0.2,
+    "beta": 1.0,
+    "cer": 1.48,
+    "greedy_cer": 2.44
+  },
+  "be": {
+    "decode": "greedy",
+    "greedy_cer": 5.59
+  },
+  "bg": {
+    "decode": "beam+lm",
+    "corpus": "core",
+    "alpha": 0.1,
+    "beta": 1.0,
+    "cer": 2.45,
+    "greedy_cer": 3.41
+  },
+  "cv": {
+    "decode": "greedy",
+    "greedy_cer": 2.14
+  },
+  "kk": {
+    "decode": "beam+lm",
+    "corpus": "core",
+    "alpha": 0.16,
+    "beta": 0.5,
+    "cer": 2.89,
+    "greedy_cer": 4.13
+  },
+  "ky": {
+    "decode": "beam+lm",
+    "corpus": "bk50000",
+    "alpha": 0.08,
+    "beta": 1.0,
+    "cer": 3.07,
+    "greedy_cer": 3.13
+  },
+  "mk": {
+    "decode": "beam+lm",
+    "corpus": "core",
+    "alpha": 0.13,
+    "beta": 1.0,
+    "cer": 4.76,
+    "greedy_cer": 5.02
+  },
+  "mn": {
+    "decode": "greedy",
+    "greedy_cer": 3.68
+  },
+  "sr": {
+    "decode": "beam+lm",
+    "corpus": "core",
+    "alpha": 0.13,
+    "beta": 1.0,
+    "cer": 3.71,
+    "greedy_cer": 4.91
+  },
+  "tg": {
+    "decode": "beam+lm",
+    "corpus": "core",
+    "alpha": 0.1,
+    "beta": 0.5,
+    "cer": 4.32,
+    "greedy_cer": 5.22
+  },
+  "tt": {
+    "decode": "greedy",
+    "greedy_cer": 0.88
+  },
+  "uk": {
+    "decode": "beam+lm",
+    "corpus": "core",
+    "alpha": 0.16,
+    "beta": 1.0,
+    "cer": 3.62,
+    "greedy_cer": 4.84
+  }
+}

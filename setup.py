@@ -6,12 +6,14 @@ _long = (_here / "README.md").read_text(encoding="utf-8") if (_here / "README.md
 
 setup(
     name="occular-ocr",
-    version="0.3.1",
+    version="0.3.2",
     description="State-of-the-art OCR for Russian documents, with a zero-compilation install.",
     long_description=_long,
     long_description_content_type="text/markdown",
     license="Apache-2.0",
     packages=find_packages(exclude=["tests", "tests.*"]),
+    include_package_data=True,
+    package_data={"occular": ["*.json"]},   # cyr_decode_config.json (per-язык декод кириллицы)
     install_requires=[
         # версии синхронизированы с requirements.txt (единый источник границ совместимости)
         "numpy>=1.24.0",

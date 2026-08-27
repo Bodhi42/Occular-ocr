@@ -14,7 +14,7 @@
     print(Settings())
 """
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union, List
 import os
 
 
@@ -25,6 +25,11 @@ class Settings:
     # --- производительность ---
     num_threads: Optional[int] = None    # число CPU-ядер; None = min(доступные, 4)
     gpu: bool = False                     # исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
+
+    # --- языки ---
+    # None = русская модель (ru/en). Список кодов (напр. ['uk'] или ['ru','kk','uk']) или 'auto' =
+    # мультиязычный роутер (русская + 12 кир-языков: ba be bg cv kk ky mk mn sr tg tt uk).
+    languages: Union[None, str, List[str]] = None
 
     # --- препроцессинг ---
     deskew: bool = True                   # выпрямлять наклон скана перед детекцией
@@ -48,6 +53,7 @@ class Settings:
             "Настройки Occular-OCR:\n"
             f"  num_threads   = {self.num_threads}  (эффективно {self.resolved_threads()}; None = min(ядра,4))\n"
             f"  gpu           = {self.gpu}  (GPU/CUDA; нужен onnxruntime-gpu, иначе CPU)\n"
+            f"  languages     = {self.languages or 'ru/en (по умолчанию)'}  (None=ru/en; список кодов или 'auto'=мультиязычный)\n"
             f"  deskew        = {self.deskew}   (препроцессинг: выпрямление наклона)\n"
             f"  lm            = {self.lm}   (beam-CTC + языковая модель; −25% WER, качает LM с HF)\n"
             f"  reading_order = {self.reading_order}  (постпроцессинг: порядок чтения, нужна докачка)\n"

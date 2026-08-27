@@ -56,7 +56,7 @@ class OCRPipeline:
         if "onnx" in det_name:
             detector_kwargs.setdefault("num_threads", self.num_threads)
             detector_kwargs.setdefault("gpu", self.gpu)
-        if "onnx" in rec_name:
+        if "onnx" in rec_name or rec_name == "multilingual":
             recognizer_kwargs.setdefault("num_threads", self.num_threads)
             recognizer_kwargs.setdefault("gpu", self.gpu)
             recognizer_kwargs.setdefault("lm", bool(lm))

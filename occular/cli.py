@@ -61,6 +61,13 @@ def main():
     parser.add_argument("--image", type=str, help=argparse.SUPPRESS)
     parser.add_argument("--pdf", type=str, help=argparse.SUPPRESS)
     parser.add_argument("--gpu", action="store_true", help="Исполнять на GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu])")
+    parser.add_argument(
+        "--languages", "--lang",
+        type=str,
+        default=None,
+        help="Язык(и) текста через запятую: по умолчанию ru/en; напр. 'uk' или 'ru,kk,uk'; "
+             "'auto' — авто-определение. Кир-языки: ba be bg cv kk ky mk mn sr tg tt uk",
+    )
 
     # PDF опции
     parser.add_argument(
@@ -115,12 +122,17 @@ def main():
     _ensure_registered()
 
     detector = args.detector or "dbnet-onnx"
-    recognizer = args.recognizer or "crnn-onnx"
+    # --languages: 'auto' или список кодов через запятую. Если задан явный --recognizer, он в приоритете.
+    languages = None
+    if args.languages:
+        languages = args.languages.strip() if args.languages.strip().lower() == "auto" \
+            else [c.strip() for c in args.languages.split(",") if c.strip()]
 
     try:
         pipeline = OCRPipeline(
             detector=detector,
-            recognizer=recognizer,
+            recognizer=args.recognizer,     # None → выбор по languages (ru/en по умолчанию)
+            languages=languages,
             gpu=args.gpu
         )
     except Exception as e:

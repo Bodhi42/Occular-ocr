@@ -43,9 +43,48 @@ def ensure_weight(rel_path: str) -> str:
         )
     return hf_hub_download(WEIGHTS_HF_REPO, rel_path, revision=WEIGHTS_REVISION)
 
+
+def ensure_cyr_lm(lang: str) -> tuple:
+    """Файлы пер-язычной кир-LM: (compact_lm.npz, unigrams.txt). Сначала локально
+    (OCCULAR_CYR_LM_DIR/<lang>/), иначе качаем нужный язык с HF (CYR_LM_HF_REPO)."""
+    d = _os.environ.get("OCCULAR_CYR_LM_DIR")
+    if d:
+        npz = Path(d) / lang / NPZ_NAME
+        uni = Path(d) / lang / UNI_NAME
+        if not npz.exists() or not uni.exists():
+            raise FileNotFoundError(f"OCCULAR_CYR_LM_DIR задан, но нет {npz} или {uni}")
+        return str(npz), str(uni)
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        raise RuntimeError(
+            f"Для кир-LM '{lang}' нужен huggingface_hub (pip install huggingface_hub) "
+            f"или задайте OCCULAR_CYR_LM_DIR с папками языков.")
+    npz = hf_hub_download(CYR_LM_HF_REPO, f"{lang}/{NPZ_NAME}", revision=WEIGHTS_REVISION)
+    uni = hf_hub_download(CYR_LM_HF_REPO, f"{lang}/{UNI_NAME}", revision=WEIGHTS_REVISION)
+    return npz, uni
+
+
+def load_cyr_decode_config() -> dict:
+    """Конфиг декода кир-языков (per-язык beam+lm/greedy + alpha/beta), поставляется в пакете
+    (cyr_decode_config.json) — залочен с этой версией модели. Пусто, если файла нет."""
+    import json
+    p = Path(__file__).parent / "cyr_decode_config.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
 # Языковая модель для beam-CTC (декод по умолчанию). Качается с HF в кэш при первом запуске
 # (или берётся из папки OCCULAR_LM_DIR с файлами compact_lm.npz + unigrams.txt).
 LM_HF_REPO = "Shivin11/occular-lm-ru"   # n-gram LM + униграммы (beam-декодер, русская модель ru/en)
+
+# Пер-язычные кир-LM (12 языков, beam-декодер мультиязычного роутера). В репо файлы разложены
+# по подпапкам языка: <lang>/compact_lm.npz + <lang>/unigrams.txt. Качается только нужный язык.
+# Локальный оверрайд: OCCULAR_CYR_LM_DIR/<lang>/{compact_lm.npz,unigrams.txt}.
+CYR_LM_HF_REPO = "Shivin11/occular-lm-cyr"
 
 
 NPZ_NAME = "compact_lm.npz"
@@ -62,6 +101,18 @@ MODELS = {
         "files": ["recognizer_svtr_fp32.onnx", "recognizer_charset.txt"],
         "desc": "Распознаватель, ONNX FP32 — локально в weights/ или с HuggingFace",
         "required": True,
+    },
+    "Кир-распознаватель 12 языков (опционально)": {
+        "files": ["recognizer_svtr_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt"],
+        "desc": "Распознаватель 12 кир-языков (ba be bg cv kk ky mk mn sr tg tt uk), ONNX FP32 — "
+                "для ocr(languages=[...]); локально в weights/ или с HuggingFace",
+        "required": False,
+    },
+    "Определитель языка (опц., для авто-роутинга)": {
+        "files": ["langid_models.pkl"],
+        "desc": "char-n-gram определитель (12 кир + ru) для авто-режима languages=None; "
+                "локально в weights/ или с HuggingFace",
+        "required": False,
     },
     "Детектор таблиц (опционально)": {
         "files": ["table_detect_v3_fp32.onnx"],

@@ -81,3 +81,44 @@ def test_pipeline_contract(test_image):
         assert isinstance(item["text"], str)
         assert 0.0 <= float(item["confidence"]) <= 1.0
     assert len(json.dumps(results)) > 0
+
+
+# ---------- многоязычность (лёгкие, без весов) ----------
+
+def test_multilingual_registered():
+    """Мультиязычный распознаватель зарегистрирован."""
+    assert "multilingual" in Registry.list_recognizers()
+
+
+def test_cyr_decode_config_complete():
+    """Конфиг декода покрывает все 12 кир-языков корректными полями."""
+    from occular.model_files import load_cyr_decode_config
+    from occular.multilingual import CYR12_LANGS
+    cfg = load_cyr_decode_config()
+    assert set(cfg) == CYR12_LANGS
+    for lang, c in cfg.items():
+        assert c["decode"] in ("beam+lm", "greedy")
+        if c["decode"] == "beam+lm":
+            assert 0.0 < float(c["alpha"]) <= 1.0 and float(c["beta"]) > 0.0
+
+
+def test_language_routing_selects_recognizer():
+    """languages=None → русский распознаватель; список/'auto' → мультиязычный."""
+    from occular import _normalize_languages
+    assert _normalize_languages(None) == ("crnn-onnx", None)
+    assert _normalize_languages([]) == ("crnn-onnx", None)
+    name, kw = _normalize_languages(["uk"])
+    assert name == "multilingual" and kw == {"languages": ["uk"]}
+    name, kw = _normalize_languages("auto")
+    assert name == "multilingual" and kw == {"languages": None}
+    name, kw = _normalize_languages("uk")            # одиночная строка-код
+    assert name == "multilingual" and kw == {"languages": ["uk"]}
+
+
+def test_multilingual_recognizer_langs():
+    """Роутер принимает языки и хранит их (без загрузки весов до вызова recognize)."""
+    from occular.multilingual import MultilingualRecognizer
+    rec = MultilingualRecognizer(languages=["uk"])
+    assert rec.languages == ["uk"]
+    rec_auto = MultilingualRecognizer(languages=None)
+    assert rec_auto.languages is None

@@ -123,6 +123,7 @@ print(Settings())
 | `deskew` | `True` | Auto-correct skewed / rotated scans before detection. |
 | `lm` | `True` | Beam search + language model (best quality). `False` → fast greedy decoding, skips the LM download. |
 | `reading_order` | `False` | Order lines for multi-column layouts (downloads a small model on first use). |
+| `languages` | `None` | Text language(s). `None` → Russian/English. A list of codes (e.g. `["uk"]`) or `"auto"` enables the multilingual model (12 more Cyrillic-script languages). See [Languages](#languages). |
 | `detector` | `None` | Explicit detector name. `None` → default. |
 | `recognizer` | `None` | Explicit recognizer name. `None` → default. |
 
@@ -173,6 +174,30 @@ ocr("document.png", lm=False)       # fast greedy mode, no LM download
 ocr("document.png", deskew=False)   # skip deskew
 ocr("document.png", num_threads=2)  # limit CPU threads
 ```
+
+### Languages
+
+By default Occular reads **Russian and English**. Pass `languages=` to switch on the multilingual
+model, which adds **12 more Cyrillic-script languages**: Bashkir (`ba`), Belarusian (`be`),
+Bulgarian (`bg`), Chuvash (`cv`), Kazakh (`kk`), Kyrgyz (`ky`), Macedonian (`mk`), Mongolian (`mn`),
+Serbian (`sr`), Tajik (`tg`), Tatar (`tt`), Ukrainian (`uk`).
+
+```python
+from occular import ocr
+
+ocr("doc_uk.png", languages=["uk"])          # a single language — fastest
+ocr("mixed.png",  languages=["ru", "kk"])    # several — language is detected per line
+ocr("scan.png",   languages="auto")          # auto-detect across all supported languages
+```
+
+```bash
+ocr doc_uk.png --languages uk                # or --lang uk
+ocr mixed.png  --languages ru,kk
+ocr scan.png   --languages auto
+```
+
+The right language weights download from the Hub on first use (only the ones you ask for). More
+languages are added over time in minor releases.
 
 ### Command line
 
@@ -425,6 +450,7 @@ print(Settings())
 | `deskew` | `True` | Автовыпрямление наклонённых / повёрнутых сканов перед детекцией. |
 | `lm` | `True` | Beam + языковая модель (лучшее качество). `False` → быстрое жадное декодирование, без скачивания LM. |
 | `reading_order` | `False` | Упорядочивание строк для многоколоночных макетов (докачивает небольшую модель при первом запуске). |
+| `languages` | `None` | Язык(и) текста. `None` → русский/английский. Список кодов (напр. `["uk"]`) или `"auto"` включает многоязычную модель (ещё 12 языков на кириллице). См. [Языки](#языки). |
 | `detector` | `None` | Явное имя детектора. `None` → по умолчанию. |
 | `recognizer` | `None` | Явное имя распознавателя. `None` → по умолчанию. |
 
@@ -475,6 +501,30 @@ ocr("document.png", lm=False)       # быстрый жадный режим, б
 ocr("document.png", deskew=False)   # без выпрямления наклона
 ocr("document.png", num_threads=2)  # ограничить CPU-потоки
 ```
+
+### Языки
+
+По умолчанию Occular читает **русский и английский**. Аргумент `languages=` включает многоязычную
+модель — ещё **12 языков на кириллице**: башкирский (`ba`), белорусский (`be`), болгарский (`bg`),
+чувашский (`cv`), казахский (`kk`), киргизский (`ky`), македонский (`mk`), монгольский (`mn`),
+сербский (`sr`), таджикский (`tg`), татарский (`tt`), украинский (`uk`).
+
+```python
+from occular import ocr
+
+ocr("doc_uk.png", languages=["uk"])          # один язык — быстрее всего
+ocr("mixed.png",  languages=["ru", "kk"])    # несколько — язык определяется построчно
+ocr("scan.png",   languages="auto")          # авто-определение среди всех поддерживаемых
+```
+
+```bash
+ocr doc_uk.png --languages uk                # или --lang uk
+ocr mixed.png  --languages ru,kk
+ocr scan.png   --languages auto
+```
+
+Веса нужного языка скачиваются с Hub при первом обращении (только те, что запросили). Новые языки
+добавляются со временем в минорных релизах.
 
 ### Командная строка
 
