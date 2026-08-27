@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+- **`--json` output is now clean JSON.** Model-loading progress messages ("Loaded ...", language-model
+  info) now go to stderr instead of stdout, so `occular img.png --json > out.json` produces valid,
+  parseable JSON.
+- **`python -m occular` compatibility fix.** The deprecated `ocr_skel` alias could be imported but
+  `python -m ocr_skel` failed; the compatibility shim now keeps the alias a real package so both the
+  import and the `-m` form work. (`python -m occular` was already fine.)
+
 ## 0.3.0
 
 - **Package renamed `ocr_skel` → `occular`.** Import `occular` now (`from occular import ocr`).

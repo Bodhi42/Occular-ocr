@@ -14,6 +14,7 @@
 
 Параметры декода (подобраны абляцией): alpha=0.5, beta=1.0, beam_width=100.
 """
+import sys
 import os
 import logging
 import warnings
@@ -111,7 +112,7 @@ class LMDecoder:
             self.decoder = None
             print(f"[occular] LM (нативный декодер): {Path(npz_path).name} ({size_mb:.0f} МБ), "
                   f"униграмм={self.native.vocab_size()}, alpha={alpha} beta={beta} "
-                  f"beam={self.beam_width}")
+                  f"beam={self.beam_width}", file=sys.stderr)
             return
 
         from . import _pylm
@@ -119,7 +120,7 @@ class LMDecoder:
         self.decoder = _pylm.build_decoder(labels, npz_path, unigrams, alpha=alpha, beta=beta)
         print(f"[occular] LM (чисто-Python): {Path(npz_path).name} "
               f"({size_mb:.0f} МБ), униграмм={len(unigrams)}, "
-              f"alpha={alpha} beta={beta} beam={self.beam_width}")
+              f"alpha={alpha} beta={beta} beam={self.beam_width}", file=sys.stderr)
 
     @staticmethod
     def _log_softmax(logits: np.ndarray) -> np.ndarray:

@@ -4,6 +4,7 @@
 Имя класса оставлено для совместимости с реестром.
 """
 
+import sys
 import threading
 import warnings
 import numpy as np
@@ -45,7 +46,7 @@ class CRNNRecognizerONNX:
             from ._torch_backend import cuda_available, torch_missing_reason, load_recognizer
             if cuda_available():
                 self._torch = load_recognizer(len(self.vocab) + 1, "cuda"); self._device = "cuda"
-                print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, GPU/CUDA, PyTorch)")
+                print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, GPU/CUDA, PyTorch)", file=sys.stderr)
                 return
             warnings.warn(f"gpu=True, но GPU-бэкенд недоступен: {torch_missing_reason()}. "
                           f"Откат на CPU (ONNX).")
@@ -59,7 +60,7 @@ class CRNNRecognizerONNX:
         self.session = ort.InferenceSession(str(onnx_path), sess_options=sess_options,
                                             providers=["CPUExecutionProvider"])
         self.input_name = self.session.get_inputs()[0].name  # 'x'
-        print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, CPU, threads={sess_options.intra_op_num_threads})")
+        print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, CPU, threads={sess_options.intra_op_num_threads})", file=sys.stderr)
 
     def _infer(self, batch: np.ndarray) -> np.ndarray:
         """batch [B,3,48,W] fp32 -> логиты [B,T,C]. torch/CUDA если включён, иначе ONNX/CPU."""

@@ -4,6 +4,7 @@ GPU не требует отдельных весов — те же .onnx исп
 Нужен пакет onnxruntime-gpu (ставится отдельно: pip install onnxruntime-gpu) и CUDA.
 Если GPU запрошен, но недоступен — тихо (с одним предупреждением) откатываемся на CPU.
 """
+import sys
 import onnxruntime as ort
 
 _warned = False
@@ -23,6 +24,7 @@ def resolve_providers(gpu: bool = False):
         return ['CUDAExecutionProvider', 'CPUExecutionProvider']   # CUDA + фолбэк на CPU для неподдерж. опов
     if not _warned:
         print("[occular] gpu=True, но CUDAExecutionProvider недоступен. "
-              "Поставьте GPU-рантайм:  pip install onnxruntime-gpu  (и нужен CUDA). Пока работаю на CPU.")
+              "Поставьте GPU-рантайм:  pip install onnxruntime-gpu  (и нужен CUDA). Пока работаю на CPU.",
+              file=sys.stderr)
         _warned = True
     return ['CPUExecutionProvider']

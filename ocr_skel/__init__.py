@@ -15,10 +15,21 @@ _warnings.warn(
     DeprecationWarning, stacklevel=2,
 )
 
-# make `ocr_skel` resolve to the real package, and pre-alias every submodule so
-# `import ocr_skel.<x>` and `from ocr_skel.<x> import ...` keep working.
-_sys.modules[__name__] = _occular
+# Re-export every public name from `occular` into this module (same objects, so
+# `ocr_skel.ocr is occular.ocr`). Keep `ocr_skel` a *real* package (not a sys.modules
+# alias) so `python -m ocr_skel` can still load this package's own `__main__.py`.
+for _k, _v in vars(_occular).items():
+    if not _k.startswith("__"):
+        globals()[_k] = _v
+__version__ = _occular.__version__
+__all__ = getattr(_occular, "__all__", None)
+
+# Pre-alias every submodule so `import ocr_skel.<x>` and `from ocr_skel.<x> import ...` keep working.
+# Skip dunder modules (`__main__`): aliasing `__main__` would shadow this package's own
+# `__main__.py` and break `python -m ocr_skel` (runpy must load the real ocr_skel.__main__).
 for _m in _pkgutil.iter_modules(_occular.__path__):
+    if _m.name.startswith("__"):
+        continue
     try:
         _sys.modules[f"{__name__}.{_m.name}"] = _importlib.import_module(f"occular.{_m.name}")
     except Exception:

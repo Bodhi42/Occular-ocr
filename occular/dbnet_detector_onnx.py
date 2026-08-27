@@ -5,6 +5,7 @@
 и мелкий латинский текст (40+ строк).
 """
 
+import sys
 import warnings
 import numpy as np
 import onnxruntime as ort
@@ -42,7 +43,7 @@ class DBNetDetectorONNX:
             from ._torch_backend import cuda_available, torch_missing_reason, load_detector
             if cuda_available():
                 self._torch = load_detector("cuda"); self._device = "cuda"
-                print("Loaded DBNet detector (GPU/CUDA, PyTorch)")
+                print("Loaded DBNet detector (GPU/CUDA, PyTorch)", file=sys.stderr)
                 return
             warnings.warn(f"gpu=True, но GPU-бэкенд недоступен: {torch_missing_reason()}. "
                           f"Откат на CPU (ONNX).")
@@ -57,7 +58,7 @@ class DBNetDetectorONNX:
         self.session = ort.InferenceSession(str(onnx_path), sess_options=sess_options,
                                             providers=["CPUExecutionProvider"])
         self.input_name = self.session.get_inputs()[0].name  # 'x'
-        print(f"Loaded DBNet detector (CPU, threads={sess_options.intra_op_num_threads})")
+        print(f"Loaded DBNet detector (CPU, threads={sess_options.intra_op_num_threads})", file=sys.stderr)
 
     def detect(self, image: np.ndarray) -> List[np.ndarray]:
         """Detect text regions. image — RGB (как отдаёт пайплайн; наш детектор училс на RGB)."""
