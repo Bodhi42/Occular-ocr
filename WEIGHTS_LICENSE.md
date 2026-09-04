@@ -2,10 +2,16 @@
 
 The **model weights** distributed with Occular-OCR — including, without limitation, the text
 detector, the text recognizer(s) (`svtr_lcnet` and `svtr_t`, for Russian/English and for the 12
-Cyrillic-script languages), the page-orientation model, the language model(s), and the optional
-reading-order model — are licensed under a **modified AI Pubs OpenRAIL-M** license. This applies to
-every weight file shipped with Occular-OCR or distributed for it from Hugging Face
-(`Shivin11/occular-ocr`), whether downloaded automatically or placed in `weights/` by hand.
+Cyrillic-script languages), the language model(s), and the optional reading-order model — are
+licensed under a **modified AI Pubs OpenRAIL-M** license. This applies to every such weight file
+shipped with Occular-OCR or distributed for it from Hugging Face (`Shivin11/occular-ocr`), whether
+downloaded automatically or placed in `weights/` by hand.
+
+> **Exception — the page-orientation model.** The page-orientation weights
+> (`orientation_orinet_fp32.onnx`) are **not** covered by this license. They are released under the
+> **Apache License 2.0**, the same terms as the Occular-OCR source code — free for any use,
+> including commercial, subject only to attribution. The OpenRAIL-M terms below do not apply to
+> that file.
 
 > The **source code** of Occular-OCR is separately licensed under the Apache License 2.0
 > (see [`LICENSE`](LICENSE)). This file governs only the model weights.
