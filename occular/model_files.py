@@ -97,15 +97,39 @@ MODELS = {
         "desc": "Детектор текста, ONNX FP32 — локально в weights/ или с HuggingFace",
         "required": True,
     },
-    "Распознаватель (читает текст в строках)": {
-        "files": ["recognizer_svtr_fp32.onnx", "recognizer_charset.txt"],
-        "desc": "Распознаватель, ONNX FP32 — локально в weights/ или с HuggingFace",
+    "Распознаватель svtr_lcnet (по умолчанию)": {
+        "files": ["recognizer_svtr_lcnet_fp32.onnx", "recognizer_charset.txt"],
+        "desc": "Лёгкий распознаватель ru/en (LCNet-стем), ONNX FP32 — модель по умолчанию, "
+                "~4x быстрее svtr_t при качестве 99.6%; локально в weights/ или с HuggingFace",
         "required": True,
     },
-    "Кир-распознаватель 12 языков (опционально)": {
+    "Распознаватель svtr_t (крупный, опционально)": {
+        "files": ["recognizer_svtr_fp32.onnx", "recognizer_charset.txt"],
+        "desc": "Крупный распознаватель ru/en — для ocr(recognizer='svtr_t') и GPU-пути; "
+                "локально в weights/ или с HuggingFace",
+        "required": False,
+    },
+    "Кир-распознаватель 12 языков, svtr_lcnet (опц.)": {
+        "files": ["recognizer_svtr_lcnet_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt"],
+        "desc": "Лёгкий распознаватель 12 кир-языков (ba be bg cv kk ky mk mn sr tg tt uk), ONNX FP32 — "
+                "по умолчанию для ocr(languages=[...]); локально в weights/ или с HuggingFace",
+        "required": False,
+    },
+    "Кир-распознаватель 12 языков, svtr_t (опц.)": {
         "files": ["recognizer_svtr_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt"],
         "desc": "Распознаватель 12 кир-языков (ba be bg cv kk ky mk mn sr tg tt uk), ONNX FP32 — "
                 "для ocr(languages=[...]); локально в weights/ или с HuggingFace",
+        "required": False,
+    },
+    "torch-веса svtr_lcnet для GPU (опционально)": {
+        "files": ["recognizer_svtr_lcnet_fp32.pth", "recognizer_svtr_lcnet_cyr12_fp32.pth"],
+        "desc": "Веса PyTorch для GPU-пути (gpu=True); на CPU не нужны — там исполняется ONNX",
+        "required": False,
+    },
+    "Ориентация страницы (опционально)": {
+        "files": ["orientation_orinet_fp32.onnx"],
+        "desc": "Определяет поворот страницы 0/90/180/270° — для ocr(orientation=True); "
+                "локально в weights/ или с HuggingFace",
         "required": False,
     },
     "Определитель языка (опц., для авто-роутинга)": {
@@ -161,7 +185,8 @@ def model_info():
         elif m["required"]:
             status = "❌ НЕТ (обязательна!)"
         else:
-            status = "⬇ не скачана (опц., см. download_reading_order())"
+            # опциональные модели качаются сами при первом использовании своей функции
+            status = "⬇ не скачана (опц., скачается при первом использовании)"
         print(f"{name[:48]:48} {size:>8}  {status}")
         for f in m["files"]:
             print(f"    └─ {f}")

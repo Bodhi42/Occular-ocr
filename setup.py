@@ -6,7 +6,7 @@ _long = (_here / "README.md").read_text(encoding="utf-8") if (_here / "README.md
 
 setup(
     name="occular-ocr",
-    version="0.3.2",
+    version="0.4.1",
     description="State-of-the-art OCR for Russian documents, with a zero-compilation install.",
     long_description=_long,
     long_description_content_type="text/markdown",

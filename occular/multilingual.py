@@ -24,7 +24,10 @@ ALL_LANGS = RU_MODEL_LANGS | CYR12_LANGS
 
 
 class MultilingualRouter:
-    def __init__(self, num_threads: int = 4, gpu: bool = False, lm: bool = True):
+    def __init__(self, num_threads: int = 4, gpu: bool = False, lm: bool = True,
+                 arch: str = None):
+        from .recognizer_onnx import DEFAULT_ARCH
+        self._arch = arch or DEFAULT_ARCH                       # одна архитектура на обе модели
         self._num_threads = num_threads
         self._gpu = gpu
         self._use_lm = bool(lm)
@@ -42,7 +45,7 @@ class MultilingualRouter:
         if self._ru_rec is None:
             from .recognizer_onnx import CRNNRecognizerONNX
             self._ru_rec = CRNNRecognizerONNX(languages=['ru', 'en'], num_threads=self._num_threads,
-                                              gpu=self._gpu, lm=self._use_lm)
+                                              gpu=self._gpu, lm=self._use_lm, arch=self._arch)
         return self._ru_rec
 
     @property
@@ -51,10 +54,12 @@ class MultilingualRouter:
             from .recognizer_onnx import CRNNRecognizerONNX
             # Кир-модель — только CPU/ONNX (torch-бэкенда .pth для неё нет). lm=False: декодом рулит
             # роутер (каждую кир-строку — её пер-язычной LM или greedy по конфигу).
+            from .recognizer_onnx import arch_files
+            cyr_onnx, cyr_charset = arch_files(self._arch, "cyr")
+            # GPU для кир-модели есть только у svtr_lcnet (torch-веса залиты с 0.4.1)
             self._cyr_rec = CRNNRecognizerONNX(languages=sorted(CYR12_LANGS), num_threads=self._num_threads,
-                                               gpu=False, lm=False,
-                                               onnx_file="recognizer_svtr_cyr12_fp32.onnx",
-                                               charset_file="recognizer_charset_cyr12.txt")
+                                               gpu=self._gpu, lm=False, arch=self._arch, family="cyr",
+                                               onnx_file=cyr_onnx, charset_file=cyr_charset)
         return self._cyr_rec
 
     def _get_langid(self):
@@ -158,9 +163,9 @@ class MultilingualRecognizer:
     """
 
     def __init__(self, languages: Optional[List[str]] = None, num_threads: int = 4,
-                 gpu: bool = False, lm: bool = True, **_ignore):
+                 gpu: bool = False, lm: bool = True, arch: str = None, **_ignore):
         self.languages = list(languages) if languages else None
-        self._router = MultilingualRouter(num_threads=num_threads, gpu=gpu, lm=lm)
+        self._router = MultilingualRouter(num_threads=num_threads, gpu=gpu, lm=lm, arch=arch)
 
     def recognize(self, image: np.ndarray, quads: List[np.ndarray]) -> List[Tuple[str, float]]:
         return [(t, c) for t, c, _lg in self._router.recognize(image, quads, self.languages)]

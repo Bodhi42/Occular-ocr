@@ -32,13 +32,14 @@ class OCRPipeline:
     def __init__(self, detector_name: str = None, recognizer_name: str = None,
                  detector_kwargs: dict = None, recognizer_kwargs: dict = None,
                  deskew: bool = True, reading_order: bool = False, lm: bool = True,
-                 num_threads: int = None, gpu: bool = False):
+                 num_threads: int = None, gpu: bool = False, orientation: bool = False):
         """
         Args:
             detector_name: имя детектора (по умолчанию 'dbnet-onnx')
             recognizer_name: имя распознавателя (по умолчанию 'crnn-onnx')
             detector_kwargs: параметры для детектора
             recognizer_kwargs: параметры для распознавателя
+            orientation: определять поворот страницы (0/90/180/270°) и выпрямлять; ВЫКЛ по умолчанию
             num_threads: число CPU-ядер для инференса (None = min(доступные, 4))
             gpu: исполнять на GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu]; иначе фолбэк на CPU)
         """
@@ -64,6 +65,9 @@ class OCRPipeline:
         self.detector = Registry.get_detector(detector_name, **detector_kwargs)
         self.recognizer = Registry.get_recognizer(recognizer_name, **recognizer_kwargs)
         self.deskew = deskew   # выпрямление наклона скана перед детекцией (по умолчанию ВКЛ)
+        # Ориентация страницы (0/90/180/270°) — ВЫКЛ по умолчанию, модель ленивая.
+        self.orientation = bool(orientation)
+        self._orient = None
         self.reading_order = reading_order   # порядок чтения через layout-модель (по умолчанию ВЫКЛ)
         self._ro = None
         if reading_order:
@@ -82,6 +86,14 @@ class OCRPipeline:
         """
         # Загрузка изображения
         image = self._load_image(image_path)
+
+        # Препроцессинг: сначала поворот на 90° (если включён), потом мелкий наклон.
+        # Порядок важен: deskew правит единицы градусов и на боку работать не должен.
+        if self.orientation:
+            if self._orient is None:
+                from .orientation import OrientationDetector
+                self._orient = OrientationDetector(num_threads=self.num_threads)
+            image, _applied, _conf = self._orient.correct(image)
 
         # Препроцессинг: выпрямление наклона (deskew), по умолчанию ВКЛ
         if self.deskew:

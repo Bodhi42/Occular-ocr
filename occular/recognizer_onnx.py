@@ -18,13 +18,38 @@ from itertools import groupby
 INPUT_HEIGHT = 48       # высота входа
 MAX_WIDTH = 640         # var-width cap
 
+# Архитектуры распознавателя: имя -> файлы весов для русской (ru/en) и кир-12 моделей.
+#   svtr_lcnet — лёгкая (LCNet-стем + 6 глобальных блоков), ~4x быстрее, качество 99.6% от svtr_t;
+#   svtr_t     — крупная, исходная.
+RECOGNIZER_ARCHS = {
+    "svtr_lcnet": {"ru":  ("recognizer_svtr_lcnet_fp32.onnx", "recognizer_charset.txt"),
+                   "cyr": ("recognizer_svtr_lcnet_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt")},
+    "svtr_t":     {"ru":  ("recognizer_svtr_fp32.onnx", "recognizer_charset.txt"),
+                   "cyr": ("recognizer_svtr_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt")},
+}
+DEFAULT_ARCH = "svtr_lcnet"
+
+
+def arch_files(arch: str, family: str = "ru"):
+    """(onnx_file, charset_file) для архитектуры и семейства ('ru' | 'cyr')."""
+    if arch not in RECOGNIZER_ARCHS:
+        raise ValueError(f"неизвестная архитектура распознавателя {arch!r}; "
+                         f"доступны: {', '.join(RECOGNIZER_ARCHS)}")
+    return RECOGNIZER_ARCHS[arch][family]
+
 
 class CRNNRecognizerONNX:
     """Text recognizer via ONNX Runtime (var-width, blank=0)."""
 
     def __init__(self, languages: List[str] = None, num_threads: int = 4, gpu: bool = False,
-                 lm: bool = True, onnx_file: str = "recognizer_svtr_fp32.onnx",
-                 charset_file: str = "recognizer_charset.txt"):
+                 lm: bool = True, onnx_file: str = None, charset_file: str = None,
+                 arch: str = DEFAULT_ARCH, family: str = "ru"):
+        # Файлы берутся из архитектуры; onnx_file/charset_file — явное переопределение.
+        self.arch = arch
+        self.family = family                    # 'ru' (ru/en) или 'cyr' (12 кир-языков)
+        _onnx, _charset = arch_files(arch, family)
+        onnx_file = onnx_file or _onnx
+        charset_file = charset_file or _charset
         self.languages = languages or ['ru', 'en']
         self.lm = bool(lm)          # beam-CTC + языковая модель (по умолчанию ВКЛ)
         self._onnx_file = onnx_file  # вариант модели: русская (дефолт) или кириллическая-12
@@ -43,9 +68,15 @@ class CRNNRecognizerONNX:
 
         # GPU-путь: нативный torch на CUDA (веса .pth). Надёжнее onnxruntime-gpu.
         if gpu:
-            from ._torch_backend import cuda_available, torch_missing_reason, load_recognizer
+            from ._torch_backend import cuda_available, torch_missing_reason, load_recognizer, REC_PTH_BY_ARCH
+            if family not in REC_PTH_BY_ARCH.get(arch, {}):
+                warnings.warn(f"gpu=True недоступен для {arch!r}/{family!r} (torch-весов нет); "
+                              f"распознавание пойдёт на CPU.")
+                gpu = False
+        if gpu:
             if cuda_available():
-                self._torch = load_recognizer(len(self.vocab) + 1, "cuda"); self._device = "cuda"
+                self._torch = load_recognizer(len(self.vocab) + 1, "cuda", arch=arch, family=family)
+                self._device = "cuda"
                 print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, GPU/CUDA, PyTorch)", file=sys.stderr)
                 return
             warnings.warn(f"gpu=True, но GPU-бэкенд недоступен: {torch_missing_reason()}. "

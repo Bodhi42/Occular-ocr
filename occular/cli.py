@@ -100,6 +100,19 @@ def main():
         help="Вывести полный JSON (с координатами)"
     )
 
+    parser.add_argument(
+        "--orientation",
+        action="store_true",
+        help="Определить поворот страницы (0/90/180/270°) и выпрямить перед OCR"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=["svtr_lcnet", "svtr_t"],
+        default=None,
+        help="Архитектура распознавателя: svtr_lcnet (по умолчанию, быстрая) или svtr_t (крупная)"
+    )
+
     # Продвинутые опции
     parser.add_argument("--detector", type=str, help=argparse.SUPPRESS)
     parser.add_argument("--recognizer", type=str, help=argparse.SUPPRESS)
@@ -131,8 +144,11 @@ def main():
     try:
         pipeline = OCRPipeline(
             detector=detector,
-            recognizer=args.recognizer,     # None → выбор по languages (ru/en по умолчанию)
+            # --model задаёт архитектуру (svtr_lcnet по умолчанию); --recognizer — скрытая
+            # опция для имени из реестра, она имеет приоритет.
+            recognizer=args.recognizer or args.model,
             languages=languages,
+            orientation=args.orientation,
             gpu=args.gpu
         )
     except Exception as e:

@@ -16,7 +16,7 @@ Occular OCR Package
     ocr document.pdf --workers 4
 """
 
-__version__ = "0.3.2"
+__version__ = "0.4.1"
 
 import os
 from typing import Union, List, Dict, Optional
@@ -58,32 +58,35 @@ def _ensure_registered():
 # Простой API для чайников
 # ============================================================================
 
-def _normalize_languages(languages):
+def _normalize_languages(languages, arch=None):
     """None/[] → русская модель по умолчанию (быстрый путь, обратная совместимость).
-    Непустой список или 'auto' → мультиязычный роутер; вернуть (recognizer_name, recognizer_kwargs)."""
+    Непустой список или 'auto' → мультиязычный роутер; вернуть (recognizer_name, recognizer_kwargs).
+    arch — архитектура распознавателя ('svtr_lcnet' по умолчанию, 'svtr_t' — крупная)."""
+    extra = {"arch": arch} if arch else {}
     if not languages:
-        return "crnn-onnx", None
+        return "crnn-onnx", (extra or None)
     if isinstance(languages, str):
         if languages.lower() == "auto":
-            return "multilingual", {"languages": None}     # авто-роутинг среди всех 14 языков
+            return "multilingual", {"languages": None, **extra}   # авто-роутинг среди всех 14 языков
         languages = [languages]
-    return "multilingual", {"languages": list(languages)}
+    return "multilingual", {"languages": list(languages), **extra}
 
 
-def _build_pipeline(deskew, lm, num_threads, gpu, reading_order=False, languages=None):
+def _build_pipeline(deskew, lm, num_threads, gpu, reading_order=False, languages=None,
+                    orientation=False, arch=None):
     """Собрать конвейер. languages=None → русский распознаватель (ru/en) по умолчанию;
     список языков или 'auto' → мультиязычный роутер (русская + 12 кир-языков)."""
     _ensure_registered()
-    rec_name, rec_kwargs = _normalize_languages(languages)
+    rec_name, rec_kwargs = _normalize_languages(languages, arch)
     return _OCRPipelineBase(detector_name="dbnet-onnx", recognizer_name=rec_name,
                             recognizer_kwargs=rec_kwargs,
                             deskew=deskew, reading_order=reading_order, lm=lm,
-                            num_threads=num_threads, gpu=gpu)
+                            num_threads=num_threads, gpu=gpu, orientation=orientation)
 
 
 def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         num_threads: Optional[int] = None, gpu: bool = False,
-        languages=None) -> Union[str, List[str]]:
+        languages=None, orientation: bool = False, recognizer: Optional[str] = None) -> Union[str, List[str]]:
     """
     Распознать текст из изображения или PDF.
 
@@ -93,6 +96,8 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         lm: beam-CTC + языковая модель для декодирования (по умолчанию True; False = быстрый greedy)
         num_threads: число CPU-ядер (None = min(доступные, 4))
         gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
+        orientation: определять поворот страницы (0/90/180/270°) и выпрямлять (по умолчанию False)
+        recognizer: архитектура распознавателя — 'svtr_lcnet' (по умолчанию) или 'svtr_t' (крупная)
         languages: язык(и) текста. None (по умолчанию) — русская модель (ru/en). Список кодов —
             мультиязычный роутер: один кир-язык (напр. ['uk']) читается им, несколько (напр.
             ['ru','kk','uk']) — построчным определением языка. 'auto' — авто среди всех 14.
@@ -109,7 +114,8 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         >>> print(text)
         Привет мир
     """
-    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages)
+    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages,
+                               orientation=orientation, arch=recognizer)
 
     path = Path(file_path)
     if path.suffix.lower() == '.pdf':
@@ -131,7 +137,7 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
 
 def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
                  num_threads: Optional[int] = None, gpu: bool = False,
-                 languages=None) -> List[Dict]:
+                 languages=None, orientation: bool = False, recognizer: Optional[str] = None) -> List[Dict]:
     """
     Распознать текст с полной информацией (координаты, confidence).
 
@@ -141,6 +147,8 @@ def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
         lm: beam-CTC + языковая модель для декодирования (по умолчанию True; False = быстрый greedy)
         num_threads: число CPU-ядер (None = min(доступные, 4))
         gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
+        orientation: определять поворот страницы (0/90/180/270°) и выпрямлять (по умолчанию False)
+        recognizer: архитектура распознавателя — 'svtr_lcnet' (по умолчанию) или 'svtr_t' (крупная)
         languages: язык(и) текста (см. ocr()). None — русская модель (ru/en); список кодов или
             'auto' — мультиязычный роутер (русская + 12 кир-языков).
 
@@ -153,7 +161,8 @@ def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
         >>> for r in results:
         ...     print(f"{r['text']} ({r['confidence']:.2f})")
     """
-    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages)
+    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages,
+                               orientation=orientation, arch=recognizer)
 
     path = Path(file_path)
     if path.suffix.lower() == '.pdf':
@@ -189,14 +198,15 @@ class OCRPipeline:
         gpu: bool = False,
         detector: Optional[str] = None,
         recognizer: Optional[str] = None,
-        languages=None
+        languages=None,
+        orientation: bool = False
     ):
         _ensure_registered()
 
         # Единые настройки: можно передать объект Settings, либо отдельные kwargs (совместимость).
         if settings is None:
             settings = Settings(deskew=deskew, reading_order=reading_order, lm=lm,
-                                num_threads=num_threads, gpu=gpu,
+                                num_threads=num_threads, gpu=gpu, orientation=orientation,
                                 detector=detector, recognizer=recognizer, languages=languages)
         self.settings = settings
         s = settings
@@ -211,18 +221,20 @@ class OCRPipeline:
             )
 
         detector = s.detector or "dbnet-onnx"
-        # Явно заданный recognizer имеет приоритет; иначе выбираем по languages
-        # (None → русская модель ru/en; список/'auto' → мультиязычный роутер).
-        if s.recognizer:
-            recognizer, rec_kwargs = s.recognizer, None
+        # s.recognizer — обычно АРХИТЕКТУРА ('svtr_lcnet' | 'svtr_t'); имя из реестра
+        # ('crnn-onnx', 'multilingual') тоже принимается для обратной совместимости.
+        from .recognizer_onnx import RECOGNIZER_ARCHS
+        if s.recognizer and s.recognizer not in RECOGNIZER_ARCHS:
+            recognizer, rec_kwargs = s.recognizer, None            # старое: имя в реестре
         else:
-            recognizer, rec_kwargs = _normalize_languages(s.languages)
+            recognizer, rec_kwargs = _normalize_languages(s.languages, s.recognizer)
 
         self._pipeline = _OCRPipelineBase(
             detector_name=detector,
             recognizer_name=recognizer,
             recognizer_kwargs=rec_kwargs,
             deskew=s.deskew,
+            orientation=s.orientation,
             reading_order=s.reading_order,
             lm=s.lm,
             num_threads=s.num_threads,

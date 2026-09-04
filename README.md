@@ -49,6 +49,12 @@ certificates, invoices and IDs.
   Occular-OCR reads.
 - **Beam + language model, on by default.** A Russian n-gram language model cuts word errors
   ~18–25 % over plain greedy decoding — with **no model retraining**, just better decoding.
+- **Fast by default.** The default recognizer (`svtr_lcnet`) reads a dense page about **5× faster**
+  on CPU than the previous one while keeping 99.6 % of its accuracy. The larger model is still one
+  argument away: `recognizer="svtr_t"`.
+- **Handles sideways pages.** Turn on `orientation=True` and Occular detects a 0/90/180/270°
+  rotation and straightens the page before reading it — for phone photos and bulk scans that come
+  in rotated. Off by default; it only rotates when it is confident.
 - **Installs anywhere, no compiler.** The decoder is pure Python end to end, so you get top-tier
   decoding quality with **zero native dependencies**.
 - **CPU-first, GPU-ready.** Ships as ONNX and runs on CPU out of the box; set `gpu=True` to run natively on PyTorch/CUDA (`occular-ocr[gpu]`).
@@ -120,12 +126,13 @@ print(Settings())
 |---|---|---|
 | `num_threads` | `None` | CPU threads for inference. `None` → `min(cores, 4)`. |
 | `gpu` | `False` | Run on **GPU via PyTorch/CUDA**. Needs `occular-ocr[gpu]` (torch+torchvision); falls back to CPU (ONNX) if unavailable. |
-| `deskew` | `True` | Auto-correct skewed / rotated scans before detection. |
+| `orientation` | `False` | Detect a 0/90/180/270° page rotation and straighten it before detection — for phone photos and bulk scans that arrive sideways. Applied only when the model is at least 0.8 confident. |
+| `deskew` | `True` | Auto-correct skewed scans (a few degrees) before detection. |
 | `lm` | `True` | Beam search + language model (best quality). `False` → fast greedy decoding, skips the LM download. |
 | `reading_order` | `False` | Order lines for multi-column layouts (downloads a small model on first use). |
 | `languages` | `None` | Text language(s). `None` → Russian/English. A list of codes (e.g. `["uk"]`) or `"auto"` enables the multilingual model (12 more Cyrillic-script languages). See [Languages](#languages). |
 | `detector` | `None` | Explicit detector name. `None` → default. |
-| `recognizer` | `None` | Explicit recognizer name. `None` → default. |
+| `recognizer` | `None` | Recognizer architecture: `"svtr_lcnet"` (default — light, ~5× faster on CPU) or `"svtr_t"` (the larger model; the only one supported on GPU). |
 
 ### Full pipeline with every setting
 
@@ -135,11 +142,12 @@ from occular import OCRPipeline, Settings
 pipe = OCRPipeline(Settings(
     num_threads=8,        # CPU threads (None -> min(cores, 4))
     gpu=False,            # True -> PyTorch/CUDA (needs occular-ocr[gpu])
+    orientation=False,    # detect 0/90/180/270 rotation and straighten the page
     deskew=True,          # auto-correct skewed scans
     lm=True,              # beam + language model; False -> greedy (faster, no LM download)
     reading_order=False,  # multi-column reading order (optional model, see below)
     detector=None,        # None = default detector
-    recognizer=None,      # None = default recognizer
+    recognizer=None,      # None = svtr_lcnet; "svtr_t" = the larger model
 ))
 
 result = pipe.process_image("document.png")
@@ -170,8 +178,10 @@ from occular import ocr
 
 ocr("document.png")                 # CPU (default), full quality
 ocr("document.png", gpu=True)       # GPU via PyTorch/CUDA (needs occular-ocr[gpu])
-ocr("document.png", lm=False)       # fast greedy mode, no LM download
-ocr("document.png", deskew=False)   # skip deskew
+ocr("document.png", lm=False)             # fast greedy mode, no LM download
+ocr("document.png", deskew=False)         # skip deskew
+ocr("photo.jpg",    orientation=True)     # straighten a sideways page first
+ocr("document.png", recognizer="svtr_t")  # the larger recognizer instead of the default
 ocr("document.png", num_threads=2)  # limit CPU threads
 ```
 

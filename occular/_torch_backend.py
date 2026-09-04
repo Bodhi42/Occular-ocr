@@ -8,7 +8,13 @@ import os
 import warnings
 from pathlib import Path
 
-REC_PTH = "recognizer_svtr_fp32.pth"
+# torch-веса распознавателя по архитектуре (для GPU-пути; на CPU исполняется ONNX)
+REC_PTH = "recognizer_svtr_fp32.pth"              # svtr_t, ru/en (историческое имя)
+REC_PTH_BY_ARCH = {
+    "svtr_t":     {"ru": "recognizer_svtr_fp32.pth"},
+    "svtr_lcnet": {"ru": "recognizer_svtr_lcnet_fp32.pth",
+                   "cyr": "recognizer_svtr_lcnet_cyr12_fp32.pth"},
+}
 DET_PTH = "detector_dbnet_fp32.pth"
 
 
@@ -57,11 +63,23 @@ def _safe_load(path):
         return torch.load(path, map_location="cpu")
 
 
-def load_recognizer(nclass: int, device="cuda"):
-    """SVTR-t на CUDA (fp32, eval). nclass = len(charset)+1 (blank)."""
-    from ._svtr import build_svtr
-    m = build_svtr(nclass, "svtr_t", 48, 640, "none")
-    sd = _safe_load(_weight(REC_PTH))
+def load_recognizer(nclass: int, device="cuda", arch: str = "svtr_t", family: str = "ru"):
+    """Распознаватель на CUDA (fp32, eval). nclass = len(charset)+1 (blank).
+
+    arch: 'svtr_lcnet' (лёгкая, по умолчанию в библиотеке) или 'svtr_t' (крупная).
+    family: 'ru' (ru/en) или 'cyr' (12 кир-языков)."""
+    try:
+        rel = REC_PTH_BY_ARCH[arch][family]
+    except KeyError:
+        raise ValueError(f"нет torch-весов для arch={arch!r}, family={family!r}; "
+                         f"доступно: {REC_PTH_BY_ARCH}")
+    if arch == "svtr_lcnet":
+        from ._svtr_lcnet import build_svtr_lcnet
+        m = build_svtr_lcnet(nclass)
+    else:
+        from ._svtr import build_svtr
+        m = build_svtr(nclass, "svtr_t", 48, 640, "none")
+    sd = _safe_load(_weight(rel))
     m.load_state_dict(sd["model"] if "model" in sd else sd)
     return m.to(device).eval()
 

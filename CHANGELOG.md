@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.1
+
+- **New default recognizer `svtr_lcnet` — about 5× faster on CPU.** A lighter architecture
+  (LCNet stem + 6 global blocks) replaces `svtr_t` as the default: recognition of a dense page
+  drops from ~2.4 s to ~0.45 s at 4 threads, at 99.6 % of the old model's accuracy
+  (greedy CER 1.19 % for Russian/English, 0.53 % for the 12 Cyrillic languages); with the default
+  beam+LM decoding the two are on par. Both the Russian/English and the Cyrillic-12 recognizers
+  ship in the new architecture.
+- **The previous model is still available**: `ocr(img, recognizer="svtr_t")`,
+  `Settings(recognizer="svtr_t")` or `occular img.png --model svtr_t`. Models are now selected by
+  architecture name (`svtr_lcnet`, `svtr_t`) instead of an internal registry name; the old registry
+  names keep working. The GPU path supports `svtr_t` only — asking for `svtr_lcnet` with `gpu=True`
+  warns and recognizes on CPU.
+- **Page orientation detection (new, off by default).** `ocr(img, orientation=True)`,
+  `Settings(orientation=True)` or `occular img.png --orientation` detects a 0/90/180/270° rotation
+  and straightens the page before detection — for phone photos and bulk scans that arrive sideways.
+  A 1.2 M-parameter model (~4.8 MB, ~28 ms at 8 threads) votes over all four rotations. A rotation is applied
+  only when confidence is at least 0.8: below that the page is left untouched, because on inputs
+  that are not documents (logos, photographs of scenes) the model can be confidently wrong.
+  Runs before deskew, which handles the remaining few degrees of skew.
+- **GPU support for the new default recognizer.** `gpu=True` now runs `svtr_lcnet` natively on
+  PyTorch/CUDA for both Russian/English and the 12 Cyrillic languages — verified to produce the
+  same text as the CPU (ONNX) path line for line. Previously only `svtr_t` had CUDA weights and
+  asking for the default with `gpu=True` fell back to CPU.
+- **Smaller detector graph.** The exported detector kept two training-only branches (`thr`, `binr`)
+  that inference never reads; they are gone (240 → 222 nodes). Detector output is bit-identical —
+  verified on 20 pages and 1100 boxes, `max|Δ| = 0`.
+
 ## 0.3.2
 
 - **Multilingual recognition (12 more languages).** Pass `languages=` to read 12 additional

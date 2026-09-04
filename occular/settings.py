@@ -32,6 +32,7 @@ class Settings:
     languages: Union[None, str, List[str]] = None
 
     # --- препроцессинг ---
+    orientation: bool = False             # определять поворот страницы (0/90/180/270°) и выпрямлять; ВЫКЛ по умолчанию
     deskew: bool = True                   # выпрямлять наклон скана перед детекцией
 
     # --- декодирование ---
@@ -40,7 +41,9 @@ class Settings:
     # --- постпроцессинг ---
     reading_order: bool = False           # порядок чтения (нужна докачка layout-модели с HF)
 
-    # --- явный выбор моделей (обычно не нужно, авто) ---
+    # --- выбор моделей ---
+    # recognizer: архитектура распознавателя — 'svtr_lcnet' (по умолчанию: лёгкая, ~4x быстрее,
+    # качество 99.6% от svtr_t) или 'svtr_t' (крупная, исходная). None = svtr_lcnet.
     detector: Optional[str] = None
     recognizer: Optional[str] = None
 
@@ -54,9 +57,10 @@ class Settings:
             f"  num_threads   = {self.num_threads}  (эффективно {self.resolved_threads()}; None = min(ядра,4))\n"
             f"  gpu           = {self.gpu}  (GPU/CUDA; нужен onnxruntime-gpu, иначе CPU)\n"
             f"  languages     = {self.languages or 'ru/en (по умолчанию)'}  (None=ru/en; список кодов или 'auto'=мультиязычный)\n"
+            f"  orientation   = {self.orientation}  (препроцессинг: поворот страницы 0/90/180/270°)\n"
             f"  deskew        = {self.deskew}   (препроцессинг: выпрямление наклона)\n"
             f"  lm            = {self.lm}   (beam-CTC + языковая модель; −25% WER, качает LM с HF)\n"
             f"  reading_order = {self.reading_order}  (постпроцессинг: порядок чтения, нужна докачка)\n"
             f"  detector      = {self.detector or 'авто'}\n"
-            f"  recognizer    = {self.recognizer or 'авто'}"
+            f"  recognizer    = {self.recognizer or 'svtr_lcnet (по умолчанию)'}"
         )
