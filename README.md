@@ -323,6 +323,8 @@ model_info()
   (under **20 000 000 ₽** annual revenue **and** fewer than **8** employees). Larger organizations
   need a commercial license — **300 000 ₽ / year per organization**.
   Commercial enquiries: **user26665@gmail.com** · Telegram **[@Bodhi_b](https://t.me/Bodhi_b)**.
+- **Exception — the page-orientation model** (`orientation_orinet_fp32.onnx`) is licensed under
+  **Apache-2.0**, not OpenRAIL-M — free for any use, including commercial, attribution only.
 
 ---
 
@@ -650,6 +652,8 @@ model_info()
   **20 000 000 ₽** в год **и** менее **8** сотрудников). Крупным организациям нужна коммерческая
   лицензия — **300 000 ₽ / год на организацию**.
   Коммерческие вопросы: **user26665@gmail.com** · Telegram **[@Bodhi_b](https://t.me/Bodhi_b)**.
+- **Исключение — модель ориентации** (`orientation_orinet_fp32.onnx`) под лицензией **Apache-2.0**,
+  а не OpenRAIL-M — свободно для любого использования, включая коммерческое, только с атрибуцией.
 
 ---
 
