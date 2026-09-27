@@ -62,10 +62,12 @@ def _score_crop(recognizer, crop: np.ndarray) -> Tuple[str, float]:
 
 
 def _cand_score(text: str, conf: float) -> float:
-    """Основной скор = CTC-conf рекогнайзера, но пустой/безбуквенный кандидат штрафуется
-    (иначе высокая conf на мусоре/бланках выигрывает ложно)."""
-    n_alpha = sum(ch.isalpha() for ch in text)
-    if n_alpha == 0:
+    """Основной скор = CTC-conf рекогнайзера. Штрафуем только пустой/односимвольный кандидат
+    (анти-мусор на бланках). ⚠️ ЦИФРЫ — полноценный контент (серия/номер паспорта, ИНН, суммы),
+    их НЕ штрафуем: раньше penalty был по isalpha() → чисто-цифровой вертикальный номер душился
+    ×0.1 и проигрывал → терялся. Теперь считаем alnum (буквы+цифры)."""
+    n_alnum = sum(ch.isalnum() for ch in text)
+    if n_alnum < 2:
         return conf * 0.1
     return conf
 
