@@ -22,6 +22,7 @@ import numpy as np
 from pathlib import Path
 
 from .model_files import LM_HF_REPO
+from .code_lock import lock_codes as _lock_codes, greedy_ctc as _greedy_ctc
 
 # доброкачественные предупреждения декодера — глушим.
 logging.getLogger("pyctcdecode").setLevel(logging.ERROR)
@@ -97,10 +98,15 @@ class LMDecoder:
     иначе — чистый Python. Результат совпадает построчно. Один инстанс на процесс."""
 
     def __init__(self, vocab, alpha: float = ALPHA, beta: float = BETA,
-                 beam_width: int = BEAM_WIDTH, lm_files: tuple = None):
+                 beam_width: int = BEAM_WIDTH, lm_files: tuple = None,
+                 lock_codes: bool = True):
         """lm_files=(npz_path, uni_path) — явные файлы LM (напр. пер-язычная кир-LM);
-        None = русская LM по умолчанию (_resolve_lm_files)."""
+        None = русская LM по умолчанию (_resolve_lm_files).
+        lock_codes=True — буквенно-цифровые коды (номера/счета/ИНН/серии/VIN) берутся из
+        акустики, LM их не искажает (см. code_lock.py). Отключить: lock_codes=False."""
         self.beam_width = int(beam_width)
+        self.chars = list(vocab)                    # для акустического greedy (code-lock)
+        self.lock_codes = bool(lock_codes)
         labels = [""] + list(vocab)                 # index 0 = CTC blank
         npz_path, uni_path = lm_files if lm_files else _resolve_lm_files()
         size_mb = os.path.getsize(npz_path) / 1e6
@@ -134,11 +140,17 @@ class LMDecoder:
         тексту и нормирован на длину (AUC 0.97 vs 0.90 у старого min-по-кадрам)."""
         return min(1.0, float(np.exp(logit_score / max(1, len(text)))))
 
+    def _apply_lock(self, text: str, logits_tc: np.ndarray) -> str:
+        """Замок кодов: коды берём из акустического greedy-чтения (LM их не искажает)."""
+        if not (self.lock_codes and text):
+            return text
+        return _lock_codes(text, _greedy_ctc(logits_tc, self.chars))
+
     def decode(self, logits_1tc: np.ndarray) -> tuple:
         """logits [1,T,C] -> (text, confidence)."""
         if self.native is not None:
             text, logit_score = self.native.decode(np.ascontiguousarray(logits_1tc[0], np.float32))
-            return text, self._confidence(text, logit_score)
+            return self._apply_lock(text, logits_1tc[0]), self._confidence(text, logit_score)
 
         lp = self._log_softmax(logits_1tc[0].astype(np.float32))
         beams = self.decoder.decode_beams(lp, beam_width=self.beam_width)
@@ -147,7 +159,7 @@ class LMDecoder:
         top = beams[0]
         text = top[0]                                    # (text, last_word, frames, logit_score, lm_score)
         logit_score = float(top[-2])                     # акустический score пути (без LM), ≤ 0
-        return text, self._confidence(text, logit_score)
+        return self._apply_lock(text, logits_1tc[0]), self._confidence(text, logit_score)
 
     def decode_many(self, logits_list) -> list:
         """Список [1,T,C] -> список (text, confidence).
@@ -158,4 +170,5 @@ class LMDecoder:
         if self.native is None:
             return [self.decode(lg) for lg in logits_list]
         batch = [np.ascontiguousarray(lg[0], np.float32) for lg in logits_list]
-        return [(t, self._confidence(t, s)) for t, s in self.native.decode_batch(batch)]
+        return [(self._apply_lock(t, lg[0]), self._confidence(t, s))
+                for (t, s), lg in zip(self.native.decode_batch(batch), logits_list)]

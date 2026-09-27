@@ -122,3 +122,55 @@ class DBNetDetectorONNX:
             quads.append(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float32))
 
         return quads
+
+    # ------------------------------------------------------------------
+    # ORIENTED-путь (DET_REWORK_01): та же детекция, но с сохранённой геометрией угла.
+    # detect()/_postprocess выше НЕ меняются — прод-путь остаётся байт-в-байт.
+    # ------------------------------------------------------------------
+    def detect_regions(self, image: np.ndarray):
+        """Как detect(), но возвращает List[TextRegion] с ориентированной геометрией (oriented_quad,
+        polygon, ось), НЕ теряя угол. Пороги/веса/анклип идентичны detect(). Опционален (флаг пайплайна)."""
+        orig_h, orig_w = image.shape[:2]
+        input_tensor, scale = self._preprocess(image)
+        if self._torch is not None:
+            from ._torch_backend import infer
+            prob_map = infer(self._torch, input_tensor, self._device)[0][0].cpu().numpy()
+        else:
+            prob_map = self.session.run(None, {self.input_name: input_tensor})[0][0]
+        return self._postprocess_regions(prob_map, scale, orig_w, orig_h)
+
+    def _postprocess_regions(self, prob_map, scale, orig_w, orig_h):
+        """Зеркало _postprocess (те же BIN_T/SCORE_T/UNCLIP), но вместо boundingRect сохраняет
+        unclipped-полигон в координатах страницы → orientation_geom.build_region (oriented-quad, ось)."""
+        from .orientation_geom import build_region
+        binary = (prob_map > BIN_T).astype(np.uint8)
+        contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) > MAX_CAND:
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)[:MAX_CAND]
+
+        regions = []
+        for c in contours:
+            if cv2.contourArea(c) < MIN_SIZE * MIN_SIZE:
+                continue
+            mk = np.zeros(prob_map.shape, dtype=np.uint8)
+            cv2.drawContours(mk, [c], -1, 1, -1)
+            if not mk.any() or float(prob_map[mk > 0].mean()) < SCORE_T:
+                continue
+            pts = c.reshape(-1, 2)
+            if len(pts) < 3:
+                continue
+            area = cv2.contourArea(c)
+            perim = cv2.arcLength(c, True)
+            if perim < 1:
+                continue
+            pco = pyclipper.PyclipperOffset()
+            pco.AddPath(pts.tolist(), pyclipper.JT_ROUND, pyclipper.ET_CLOSEDPOLYGON)
+            ex = pco.Execute(area * UNCLIP / perim)
+            if not ex:
+                continue
+            poly = np.array(ex[0], dtype=np.float32)               # unclipped-полигон, 1280-канвас
+            poly[:, 0] = np.clip(poly[:, 0] / scale, 0.0, float(orig_w))   # → координаты страницы
+            poly[:, 1] = np.clip(poly[:, 1] / scale, 0.0, float(orig_h))
+            regions.append(build_region(poly))
+
+        return regions

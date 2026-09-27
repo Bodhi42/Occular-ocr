@@ -42,3 +42,5 @@ ocr_skel/weights/
 
 # GitHub Actions — добавлять через веб-UI (OAuth-токен без scope workflow)
 .github/
+det_rework_01/
+det_rework_02/
