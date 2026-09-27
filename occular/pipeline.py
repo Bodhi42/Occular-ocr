@@ -32,7 +32,8 @@ class OCRPipeline:
     def __init__(self, detector_name: str = None, recognizer_name: str = None,
                  detector_kwargs: dict = None, recognizer_kwargs: dict = None,
                  deskew: bool = True, reading_order: bool = False, lm: bool = True,
-                 num_threads: int = None, gpu: bool = False, orientation: bool = False):
+                 num_threads: int = None, gpu: bool = False, orientation: bool = False,
+                 oriented_lines: bool = True):
         """
         Args:
             detector_name: имя детектора (по умолчанию 'dbnet-onnx')
@@ -68,6 +69,10 @@ class OCRPipeline:
         # Ориентация страницы (0/90/180/270°) — ВЫКЛ по умолчанию, модель ленивая.
         self.orientation = bool(orientation)
         self._orient = None
+        # oriented_lines: детекция сохраняет угол каждого региона и рекогнайзер-арбитраж
+        # снимает наклон/±90 и решает 0/180/vertical-stack. ВКЛ по умолчанию.
+        # Требует detect_regions() у детектора (dbnet-onnx умеет); иначе тихий фолбэк на detect().
+        self.oriented_lines = bool(oriented_lines) and hasattr(self.detector, "detect_regions")
         self.reading_order = reading_order   # порядок чтения через layout-модель (по умолчанию ВЫКЛ)
         self._ro = None
         if reading_order:
@@ -108,6 +113,8 @@ class OCRPipeline:
 
     def _ocr_whole(self, image: np.ndarray) -> List[Dict]:
         """Обычный OCR всей страницы: детекция всех строк -> распознавание -> сортировка сверху-вниз."""
+        if self.oriented_lines:
+            return self._ocr_whole_oriented(image)
         quads = self.detector.detect(image)
         texts_and_confidences = self.recognizer.recognize(image, quads)
         results = [
@@ -115,6 +122,28 @@ class OCRPipeline:
             for quad, (text, conf) in zip(quads, texts_and_confidences)
         ]
         results.sort(key=lambda r: r["quad"][0][1])
+        return results
+
+    def _ocr_whole_oriented(self, image: np.ndarray) -> List[Dict]:
+        """OCR с ориентацией-по-умолчанию: детекция сохраняет угол региона, затем рекогнайзер-арбитраж
+        (deskew длинной оси + выбор 0/180/vertical-stack по CTC-уверенности). Ловит наклонённые/±90/
+        вертикальные строки, которые осевой crop терял. Цена: арбитраж — по 1-3 прогона рекогнайзера
+        на регион (не батч), fast-path для уверенной горизонтали = 1 прогон."""
+        from .orientation_resolve import resolve_region
+        regions = self.detector.detect_regions(image)
+        results = []
+        for reg in regions:
+            res = resolve_region(image, reg, self.recognizer)
+            q = reg.oriented_quad if getattr(reg, "oriented_quad", None) is not None else reg.axis_aligned_quad()
+            results.append({
+                "quad": np.asarray(q, dtype=float).tolist(),
+                "text": res.text,
+                "confidence": float(res.confidence),
+                "orientation_deg": res.orientation_deg,
+                "layout": res.layout_type,
+            })
+        # сортировка сверху-вниз по верхней точке региона (как в осевом пути)
+        results.sort(key=lambda r: min(p[1] for p in r["quad"]))
         return results
 
     def _ocr_by_regions(self, image: np.ndarray) -> List[Dict]:

@@ -178,29 +178,44 @@ class AxisHeadSeg(nn.Module):
         return s.count(h.mean(dim=-1)), s.sep(h).squeeze(1)  # [B,nmax], [B,Lp] логиты
 
 
-def sep_to_bounds(logit, nmax):
-    """Логиты сепараторов [B,Lp] -> нормированные cumsum-границы [B,nmax+1] (как ждёт метрика).
-    Декод как в SPLERGE: порог 0.5 -> связные компоненты -> центр масс каждой = граница. Порог обоснован тем,
-    что это классификация (в отличие от cumsum-формулировки, где порогов не было по построению)."""
-    B, Lp = logit.shape
+def sep_to_bounds(logit, nmax, thr=0.70, min_dist=3):
+    """Логиты сепараторов [B,Lp] -> нормированные границы [B,nmax+1] (как ждёт метрика).
+    ПИКОВЫЙ декод (локальные максимумы + параболическое уточнение) вместо порог-0.5 + связные
+    компоненты. Порог-декод на длинных таблицах СЛИПАЕТ соседние сепараторы в одну компоненту
+    (при upax=4 ~5.3 позиции/строка) и теряет строки; разделение по локальным максимумам это чинит.
+    Post-processing на ТЕХ ЖЕ логитах — веса модели НЕ меняются. (table-tsr DECODER_REPORT:
+    struct-F1 0.905->0.920, реал-рус 0.762->0.795, cell-F1 merge 0.894->0.916; на длинных таблицах
+    верное число строк 40.9%->72.7%.) thr/min_dist калиброваны под upax=4."""
+    import numpy as np
     prob = torch.sigmoid(logit)
-    out = torch.ones(B, nmax+1, device=logit.device)
+    B, Lp = logit.shape
+    out = torch.ones(B, nmax + 1, device=logit.device, dtype=logit.dtype)
     for b in range(B):
-        p = prob[b]; on = (p > 0.5)
+        p = prob[b].float().cpu().numpy()
+        # кандидаты = позиции выше порога и не ниже соседей (локальный максимум)
+        cand = [i for i in range(Lp)
+                if p[i] > thr and p[i] >= p[max(0, i - 1)] and p[i] >= p[min(Lp - 1, i + 1)]]
+        keep = []                                          # прореживание ближе min_dist: остаётся высший
+        for i in cand:
+            if not keep or i - keep[-1] >= min_dist:
+                keep.append(i)
+            elif p[i] > p[keep[-1]]:
+                keep[-1] = i
         cent = []
-        i = 0
-        while i < Lp:
-            if on[i]:
-                j = i
-                while j+1 < Lp and on[j+1]: j += 1
-                w = p[i:j+1]; idx = torch.arange(i, j+1, device=p.device, dtype=p.dtype)
-                cent.append(float(((w*idx).sum()/w.sum().clamp(min=1e-6)+0.5)/Lp))
-                i = j+1
-            else: i += 1
-        cent = [c for c in cent if 1e-4 < c < 1-1e-4][:nmax-1]      # внутренние границы
-        n = len(cent)+1                                            # полос = внутренних границ + 1
-        if n > 1: out[b, :n-1] = torch.tensor(cent, device=logit.device)
-        out[b, n-1:] = 1.0
+        for i in keep:
+            if 0 < i < Lp - 1:                             # субпозиционная точность по параболе
+                y0, y1, y2 = p[i - 1], p[i], p[i + 1]
+                den = (y0 - 2 * y1 + y2)
+                off = 0.5 * (y0 - y2) / den if abs(den) > 1e-9 else 0.0
+                off = float(np.clip(off, -0.5, 0.5))
+                c = (i + off + 0.5) / Lp
+                if 1e-4 < c < 1 - 1e-4:
+                    cent.append(c)
+        cent = sorted(cent)[:nmax - 1]                     # внутренние границы
+        n = len(cent) + 1                                  # полос = внутренних границ + 1
+        if n > 1:
+            out[b, :n - 1] = torch.tensor(cent, device=logit.device, dtype=logit.dtype)
+        out[b, n - 1:] = 1.0
     return out
 
 
