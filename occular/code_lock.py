@@ -21,8 +21,11 @@ _CODECH = set(
 )
 
 
-def _protected_mask(s: str) -> list:
-    """True для символов, входящих в код-ран (alnum-ран, где есть хотя бы одна цифра)."""
+def _protected_mask(s: str, min_digits: int = 2, min_ratio: float = 0.5) -> list:
+    """True для символов код-рана. Код = alnum-ран, который ЦИФРО-ДОМИНАНТНЫЙ:
+    ≥min_digits цифр И доля цифр среди букв+цифр ≥min_ratio. Так защищаются реальные
+    номера/серии/ИНН/суммы, но НЕ обычные слова со случайной OCR-цифрой (иначе слово
+    целиком бралось из greedy и портилось: 'судебного'→'сулебног0', '304'→'Зг0уч')."""
     n = len(s)
     m = [False] * n
     i = 0
@@ -31,7 +34,10 @@ def _protected_mask(s: str) -> list:
             j = i
             while j < n and s[j] in _CODECH:
                 j += 1
-            if any(c.isdigit() for c in s[i:j]):
+            run = s[i:j]
+            nd = sum(c.isdigit() for c in run)
+            nal = sum(c.isalnum() for c in run)
+            if nd >= min_digits and nal >= 2 and nd >= nal * min_ratio:
                 for k in range(i, j):
                     m[k] = True
             i = j
