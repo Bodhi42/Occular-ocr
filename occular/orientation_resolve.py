@@ -31,6 +31,11 @@ class ResolveConfig:
     try_stack_max_aspect: float = 2.5  # STACK пробуем только если регион не сильно вытянут по ширине
     fast_path: bool = True             # 1-прогон для уверенной горизонтали (прод: страница уже upright
                                        # после page-orientation). Бенч ориентации гоняем с False.
+    # --- анти-регресс на обычных страницах (v2) ---
+    axial_angle: float = 3.0    # |угол| ниже → осевой bbox-кроп (БЕЗ warp) = байт-в-байт как старый путь
+    square_aspect: float = 1.5  # aspect ниже → near-square, ориентация неоднозначна (разрешаем арбитраж)
+    flip_margin: float = 0.12   # альтернатива (180/STACK) должна БИТЬ LINE_0 на эту маржу, иначе 0°
+    lowconf_probe: float = 0.35  # на ГОРИЗОНТАЛИ 180 пробуем только если conf(LINE_0) ниже (вдруг вверх ногами)
 
 
 @dataclass
@@ -77,48 +82,66 @@ def _orientation_from(region: TextRegion, cand: str) -> Tuple[int, str]:
         return (180 if cand == "LINE_180" else 0), "horizontal"
 
 
+def _axial_crop(image: np.ndarray, region: TextRegion) -> np.ndarray:
+    """Осевой bbox-кроп в ориентации страницы — идентично старому пути detect() (без warp)."""
+    x0, y0, x1, y1 = [int(round(v)) for v in region.bbox_xyxy]
+    return image[max(0, y0):max(1, y1), max(0, x0):max(1, x1)]
+
+
 def resolve_region(image: np.ndarray, region: TextRegion, recognizer,
                    cfg: ResolveConfig = ResolveConfig()) -> ResolveResult:
-    """Выбрать канонический вход рекогнайзера для региона и вернуть текст + orientation/layout metadata."""
-    scores: Dict[str, float] = {}
+    """Выбрать канонический вход рекогнайзера для региона и вернуть текст + orientation/layout metadata.
 
-    # --- fast-path: уверенная почти-прямая горизонталь → один прогон ---
-    if (cfg.fast_path
-            and region.layout_type == "horizontal"
-            and (region.geometry_confidence or 0.0) >= cfg.fast_conf
-            and abs(region.local_angle_deg or 0.0) <= cfg.fast_angle):
-        crop = oriented_crop(image, region)                 # локальный deskew по oriented-quad
+    v2 (анти-регресс): 0/180-арбитраж применяется ТОЛЬКО к неоднозначным регионам
+    (вертикальная ось или near-square). Горизонтальные строки — только 0° (deskew при заметном
+    наклоне, иначе осевой кроп как в старом пути), без флипа на 180 — иначе перевёрнутое чтение
+    цифр/кодов в буквы ложно выигрывает (напр. 044525225→SCCSCSPPO). 180/STACK берём лишь если
+    бьют LINE_0 на маржу."""
+    scores: Dict[str, float] = {}
+    ang = abs(region.local_angle_deg or 0.0)
+    aspect = region.aspect_ratio or 1.0
+    axis_vertical = ang >= 45.0
+    near_square = aspect < cfg.square_aspect
+
+    # ---- ГОРИЗОНТАЛЬ (не вертикаль, не near-square): только 0°, БЕЗ 180-арбитража ----
+    if not axis_vertical and not near_square:
+        crop = _axial_crop(image, region) if ang < cfg.axial_angle else oriented_crop(image, region)
         text, conf = _score_crop(recognizer, crop)
         scores["LINE_0"] = round(_cand_score(text, conf), 4)
-        if _cand_score(text, conf) >= cfg.fast_accept_conf:
-            region.layout_type = "horizontal"; region.orientation_deg = 0
-            region.orientation_confidence = round(conf, 3)
-            return ResolveResult(text, conf, "fast/LINE_0", 0, "horizontal", scores)
-        # низкая conf → падаем в ambiguous (проверим 180 и, возможно, stack)
+        # предохранитель: очень низкая conf → вдруг строка вверх ногами; пробуем 180, берём ТОЛЬКО с маржой
+        if conf < cfg.lowconf_probe:
+            t180, c180 = _score_crop(recognizer, cv2.rotate(crop, cv2.ROTATE_180))
+            scores["LINE_180"] = round(_cand_score(t180, c180), 4)
+            if scores["LINE_180"] >= scores["LINE_0"] + cfg.flip_margin:
+                region.layout_type = "horizontal"; region.orientation_deg = 180
+                region.orientation_confidence = round(c180, 3)
+                return ResolveResult(t180, c180, "LINE_180", 180, "horizontal", scores)
+        region.layout_type = "horizontal"; region.orientation_deg = 0
+        region.orientation_confidence = round(conf, 3)
+        return ResolveResult(text, conf, "LINE_0", 0, "horizontal", scores)
 
-    # --- ambiguous-path: строим и сравниваем кандидаты ---
+    # ---- ВЕРТИКАЛЬ / NEAR-SQUARE: кандидаты 0/180/STACK, выбор с маржой к 0° ----
     line0 = oriented_crop(image, region)
     t0, c0 = _score_crop(recognizer, line0)
     line180 = cv2.rotate(line0, cv2.ROTATE_180)
     t180, c180 = _score_crop(recognizer, line180)
     cand_text = {"LINE_0": t0, "LINE_180": t180}
+    cand_conf = {"LINE_0": c0, "LINE_180": c180}
     scores["LINE_0"] = round(_cand_score(t0, c0), 4)
     scores["LINE_180"] = round(_cand_score(t180, c180), 4)
-    cand_conf = {"LINE_0": c0, "LINE_180": c180}
 
-    # STACK — только если регион не сильно горизонтально-вытянут (у широкой строки stack бессмыслен)
-    aspect = region.aspect_ratio or 1.0
-    horizontal_wide = (region.layout_type == "horizontal" and aspect > cfg.try_stack_max_aspect)
-    if not horizontal_wide:
-        x0, y0, x1, y1 = [int(round(v)) for v in region.bbox_xyxy]
-        aa = image[max(0, y0):max(1, y1), max(0, x0):max(1, x1)]   # осевой кроп: глифы в ориентации страницы
-        us = unstack_vertical_text(aa)
+    if aspect <= cfg.try_stack_max_aspect:
+        us = unstack_vertical_text(_axial_crop(image, region))
         if us.ok:
             ts, cs = _score_crop(recognizer, us.image)
             cand_text["STACK"] = ts; cand_conf["STACK"] = cs
             scores["STACK"] = round(_cand_score(ts, cs), 4)
 
-    best = max(scores, key=scores.get)
+    # 0° по умолчанию; альтернативу берём, только если она бьёт LINE_0 на маржу
+    best = "LINE_0"
+    for k, sc in scores.items():
+        if k != "LINE_0" and sc >= scores["LINE_0"] + cfg.flip_margin and sc > scores[best]:
+            best = k
     text = cand_text[best]; conf = cand_conf[best]
     if best == "STACK":
         region.layout_type = "vertical_stack"; region.orientation_deg = None
