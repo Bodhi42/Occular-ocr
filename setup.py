@@ -32,7 +32,8 @@ setup(
         "gpu": ["torch>=2.0", "torchvision>=0.15"],
         # UNWARP = нейросетевое расправление изгиба фото-страниц (UVDoc). Опционально, тяжёлое.
         # UVDoc появился в transformers>=5.17; веса UVDoc качаются с HuggingFace (model_id задаётся).
-        "unwarp": ["torch>=2.0", "transformers>=5.17"],
+        # torchvision обязателен: UVDocImageProcessor использует его трансформы (без него ImportError на импорте).
+        "unwarp": ["torch>=2.0", "torchvision>=0.15", "transformers>=5.17"],
     },
     entry_points={
         "console_scripts": [

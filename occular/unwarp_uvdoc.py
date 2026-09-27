@@ -6,7 +6,7 @@ UVDoc правит геометрический ИЗГИБ страницы (ф�
 в дефолтный пайплайн — вызывается явно как препроцесс.
 
 Зависимости (опциональный extra):
-    pip install "occular-ocr[unwarp]"      # тянет torch + transformers (UVDoc появился в transformers>=5.17)
+    pip install "occular-ocr[unwarp]"      # тянет torch + torchvision + transformers (UVDoc появился в transformers>=5.17)
 Плюс нужен чекпойнт UVDoc с Hugging Face — общепринятого дефолта в пакете НЕТ, задаётся model_id.
 
 Использование:
@@ -33,10 +33,11 @@ class UVDocUnwarper:
             )
         try:
             import torch  # noqa
+            import torchvision  # noqa  # UVDocImageProcessor использует torchvision-трансформы
             from transformers import UVDocModel, UVDocImageProcessor  # transformers>=5.17
         except Exception as e:  # noqa
             raise ImportError(
-                "UVDoc требует torch + transformers>=5.17. Установи опциональный extra: "
+                "UVDoc требует torch + torchvision + transformers>=5.17. Установи опциональный extra: "
                 "pip install 'occular-ocr[unwarp]'"
             ) from e
         self._torch = torch
