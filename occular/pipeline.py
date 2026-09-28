@@ -33,7 +33,7 @@ class OCRPipeline:
                  detector_kwargs: dict = None, recognizer_kwargs: dict = None,
                  deskew: bool = True, reading_order: bool = False, lm: bool = True,
                  num_threads: int = None, gpu: bool = False, orientation: bool = False,
-                 oriented_lines: bool = True):
+                 oriented_lines: bool = True, unwarp=None, unwarp_gate: bool = True):
         """
         Args:
             detector_name: имя детектора (по умолчанию 'dbnet-onnx')
@@ -43,6 +43,13 @@ class OCRPipeline:
             orientation: определять поворот страницы (0/90/180/270°) и выпрямлять; ВЫКЛ по умолчанию
             num_threads: число CPU-ядер для инференса (None = min(доступные, 4))
             gpu: исполнять на GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu]; иначе фолбэк на CPU)
+            unwarp: опц. нейросетевое расправление изгиба (UVDoc). None = выкл (по умолч).
+                Строка = HF model_id/локальная папка с весами (ленивая загрузка), либо готовый
+                UVDocUnwarper. Требует extra [unwarp]. Тяжёлый препроцесс для фото/смятых страниц.
+            unwarp_gate: применять unwarp ТОЛЬКО если он повышает читаемость (self-gate по
+                CTC-уверенности рекогнайзера: OCR оригинала vs дьюарпа, берём лучший). ВКЛ по умолч —
+                гарантирует «не хуже оригинала» на плоских сканах ценой доп. прогона OCR на кандидате.
+                False = применять unwarp всегда (blanket, дешевле, но может вредить плоским).
         """
         detector_kwargs = detector_kwargs or {}
         recognizer_kwargs = recognizer_kwargs or {}
@@ -78,6 +85,10 @@ class OCRPipeline:
         if reading_order:
             from .reading_order import ReadingOrderModel
             self._ro = ReadingOrderModel(num_threads=self.num_threads, gpu=self.gpu)
+        # UVDoc unwarp: None = выкл; строка = ленивый model_id/папка; иначе готовый инстанс.
+        self._unwarp_arg = unwarp
+        self._unwarp = unwarp if (unwarp is not None and not isinstance(unwarp, str)) else None
+        self.unwarp_gate = bool(unwarp_gate)
 
     def process_image(self, image_path: str) -> List[Dict]:
         """
@@ -105,11 +116,42 @@ class OCRPipeline:
             from .deskew import deskew_image
             image, _ = deskew_image(image)
 
-        # reading_order: layout делит страницу на регионы В ПОРЯДКЕ ЧТЕНИЯ (ДО детекции),
-        # затем OCR каждого региона по очереди. Иначе — обычный OCR всей страницы, сверху-вниз.
+        # UVDoc unwarp (опц.): расправить изгиб перед OCR. С self-gate — берём оригинал ИЛИ дьюарп
+        # по читаемости (не хуже оригинала на плоских). Без гейта — blanket-дьюарп.
+        if self._unwarp_arg is not None:
+            self._ensure_unwarp()
+            if not self.unwarp_gate:
+                image = self._unwarp.unwarp(image)
+                return self._ocr_page(image)
+            res_orig = self._ocr_page(image)
+            try:
+                dew = self._unwarp.unwarp(image)
+                res_dew = self._ocr_page(dew)
+            except Exception:
+                return res_orig
+            # берём дьюарп, только если он читается лучше (Σ len·conf строк)
+            return res_dew if self._readability(res_dew) > self._readability(res_orig) else res_orig
+
+        return self._ocr_page(image)
+
+    def _ocr_page(self, image: np.ndarray) -> List[Dict]:
+        """OCR уже препроцессенной страницы: reading_order по регионам или обычный проход."""
         if self.reading_order and self._ro is not None:
             return self._ocr_by_regions(image)
         return self._ocr_whole(image)
+
+    def _ensure_unwarp(self):
+        """Ленивая инициализация UVDocUnwarper из model_id-строки при первом использовании."""
+        if self._unwarp is None and isinstance(self._unwarp_arg, str):
+            from .unwarp_uvdoc import UVDocUnwarper
+            self._unwarp = UVDocUnwarper(model_id=self._unwarp_arg,
+                                         device="cuda" if self.gpu else "cpu")
+
+    @staticmethod
+    def _readability(results: List[Dict]) -> float:
+        """Читаемость страницы = Σ len(text)·confidence по строкам. Растёт, когда прочитано
+        БОЛЬШЕ текста и УВЕРЕННЕЕ — ровно то, что должен максимизировать выбор оригинал/дьюарп."""
+        return float(sum(len(r.get("text", "")) * float(r.get("confidence", 0.0)) for r in results))
 
     def _ocr_whole(self, image: np.ndarray) -> List[Dict]:
         """Обычный OCR всей страницы: детекция всех строк -> распознавание -> сортировка сверху-вниз."""
