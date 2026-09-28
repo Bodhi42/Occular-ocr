@@ -100,8 +100,18 @@ class UVDocUnwarper:
           BGR/255 -> resize(in_h,in_w, bilinear align_corners) -> сеть -> mesh(1,2,h',w')
           -> upscale mesh до (H,W) -> grid_sample по BGR-оригиналу -> BGR uint8.
         """
+        import cv2
         torch = self._torch
-        if image_bgr is None or image_bgr.ndim != 3:
+        if image_bgr is None or image_bgr.ndim not in (2, 3):
+            return image_bgr
+        # приводим к 3-канальному BGR: серые -> BGR, BGRA -> BGR (иначе permute(2,0,1) даст !=3 канала)
+        if image_bgr.ndim == 2:
+            image_bgr = cv2.cvtColor(image_bgr, cv2.COLOR_GRAY2BGR)
+        elif image_bgr.shape[2] == 4:
+            image_bgr = cv2.cvtColor(image_bgr, cv2.COLOR_BGRA2BGR)
+        elif image_bgr.shape[2] == 1:
+            image_bgr = cv2.cvtColor(image_bgr, cv2.COLOR_GRAY2BGR)
+        elif image_bgr.shape[2] != 3:
             return image_bgr
         H, W = image_bgr.shape[:2]
         # BGR [0,1], CHW, batched — cv2 уже даёт BGR (модель обучена на BGR)
