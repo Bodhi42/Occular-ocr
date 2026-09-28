@@ -31,9 +31,10 @@ setup(
         # torch>=2.0 — есть weights_only-загрузка .pth (безопасность supply-chain).
         "gpu": ["torch>=2.0", "torchvision>=0.15"],
         # UNWARP = нейросетевое расправление изгиба фото-страниц (UVDoc). Опционально, тяжёлое.
-        # UVDoc появился в transformers>=5.17; веса UVDoc качаются с HuggingFace (model_id задаётся).
-        # torchvision обязателен: UVDocImageProcessor использует его трансформы (без него ImportError на импорте).
-        "unwarp": ["torch>=2.0", "torchvision>=0.15", "transformers>=5.17"],
+        # Сеть вендорится (occular._uvdoc_model, чистый torch) — БЕЗ transformers и torchvision, чтобы
+        # не конфликтовать с ядром occular и не раздувать зависимости. Нужны лишь загрузка весов
+        # (safetensors) и их скачивание с HuggingFace (huggingface_hub); model_id задаётся явно.
+        "unwarp": ["torch>=2.0", "safetensors>=0.4", "huggingface_hub>=0.20"],
     },
     entry_points={
         "console_scripts": [
