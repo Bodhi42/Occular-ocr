@@ -33,14 +33,20 @@ class OCRPipeline:
                  detector_kwargs: dict = None, recognizer_kwargs: dict = None,
                  deskew: bool = True, reading_order: bool = False, lm: bool = True,
                  num_threads: int = None, gpu: bool = False, orientation: bool = False,
-                 oriented_lines: bool = True, unwarp=None, unwarp_gate: bool = True):
+                 oriented_lines: bool = None, unwarp=None, unwarp_gate: bool = True):
         """
         Args:
             detector_name: имя детектора (по умолчанию 'dbnet-onnx')
             recognizer_name: имя распознавателя (по умолчанию 'crnn-onnx')
             detector_kwargs: параметры для детектора
             recognizer_kwargs: параметры для распознавателя
-            orientation: определять поворот страницы (0/90/180/270°) и выпрямлять; ВЫКЛ по умолчанию
+            deskew: геометрическое выпрямление строк — FHT-наклон всей страницы (единицы градусов)
+                И per-crop поворот кропов (снятие наклона/±90 + арбитраж 0/180/vertical-stack по
+                CTC-уверенности). ВКЛ по умолчанию. Две прежние ручки (deskew + oriented_lines) сведены
+                в эту одну. Для повёрнутых на 90/180/270° СТРАНИЦ нужен отдельно orientation.
+            orientation: нейро-определение поворота страницы (0/90/180/270°) и выпрямление; ВЫКЛ по умолч.
+            oriented_lines: УСТАРЕЛО. None (по умолч) = следовать deskew. Задавай True/False только
+                чтобы принудительно оторвать per-crop ориентацию от deskew (обратная совместимость).
             num_threads: число CPU-ядер для инференса (None = min(доступные, 4))
             gpu: исполнять на GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu]; иначе фолбэк на CPU)
             unwarp: опц. нейросетевое расправление изгиба (UVDoc). None = выкл (по умолч).
@@ -72,14 +78,16 @@ class OCRPipeline:
 
         self.detector = Registry.get_detector(detector_name, **detector_kwargs)
         self.recognizer = Registry.get_recognizer(recognizer_name, **recognizer_kwargs)
-        self.deskew = deskew   # выпрямление наклона скана перед детекцией (по умолчанию ВКЛ)
+        self.deskew = deskew   # геом. выпрямление строк: FHT-наклон страницы + per-crop поворот кропов
         # Ориентация страницы (0/90/180/270°) — ВЫКЛ по умолчанию, модель ленивая.
         self.orientation = bool(orientation)
         self._orient = None
-        # oriented_lines: детекция сохраняет угол каждого региона и рекогнайзер-арбитраж
-        # снимает наклон/±90 и решает 0/180/vertical-stack. ВКЛ по умолчанию.
+        # per-crop ориентация строк (детекция сохраняет угол региона, рекогнайзер-арбитраж снимает
+        # наклон/±90 и решает 0/180/vertical-stack) СВЕДЕНА в флаг deskew — отдельной ручки нет.
+        # oriented_lines оставлен ТОЛЬКО как устаревший override: None = следовать deskew (норма).
         # Требует detect_regions() у детектора (dbnet-onnx умеет); иначе тихий фолбэк на detect().
-        self.oriented_lines = bool(oriented_lines) and hasattr(self.detector, "detect_regions")
+        _ol = self.deskew if oriented_lines is None else oriented_lines
+        self.oriented_lines = bool(_ol) and hasattr(self.detector, "detect_regions")
         self.reading_order = reading_order   # порядок чтения через layout-модель (по умолчанию ВЫКЛ)
         self._ro = None
         if reading_order:
