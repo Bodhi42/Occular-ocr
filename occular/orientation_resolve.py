@@ -92,6 +92,23 @@ def _axial_crop(image: np.ndarray, region: TextRegion) -> np.ndarray:
 
 def resolve_region(image: np.ndarray, region: TextRegion, recognizer,
                    cfg: ResolveConfig = ResolveConfig()) -> ResolveResult:
+    """Обёртка: ни один битый регион не должен рушить страницу. При любом исключении в арбитраже
+    (вырожденный warp, пустой кроп и т.п.) — безопасный осевой фолбэк (LINE_0, 0°)."""
+    try:
+        return _resolve_region_impl(image, region, recognizer, cfg)
+    except Exception:
+        try:
+            text, conf = _score_crop(recognizer, _axial_crop(image, region))
+        except Exception:
+            text, conf = "", 0.0
+        region.layout_type = "horizontal"; region.orientation_deg = 0
+        region.orientation_confidence = round(float(conf), 3)
+        return ResolveResult(text, conf, "LINE_0", 0, "horizontal",
+                             {"LINE_0": round(_cand_score(text, conf), 4)})
+
+
+def _resolve_region_impl(image: np.ndarray, region: TextRegion, recognizer,
+                   cfg: ResolveConfig = ResolveConfig()) -> ResolveResult:
     """Выбрать канонический вход рекогнайзера для региона и вернуть текст + orientation/layout metadata.
 
     v2 (анти-регресс): 0/180-арбитраж применяется ТОЛЬКО к неоднозначным регионам

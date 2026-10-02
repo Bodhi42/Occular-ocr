@@ -124,18 +124,19 @@ class OCRPipeline:
         # Загрузка изображения
         image = self._load_image(image_path)
 
-        # Препроцессинг: сначала поворот на 90° (если включён), потом мелкий наклон.
-        # Порядок важен: deskew правит единицы градусов и на боку работать не должен.
+        # Порядок эшелонов поворота: (1) FHT-deskew мелкого наклона -> (2) нейро 90-кратная
+        # ориентация страницы -> (3) per-crop ориентация строк (внутри _ocr_page, последней).
+        # FHT дешёв и правит общий наклон; 90-кратная чинит грубую ориентацию; остаточный
+        # наклон после разворота добирает per-crop (снятие наклона кропа) как финальная сетка.
+        if self.deskew:
+            from .deskew import deskew_image
+            image, _ = deskew_image(image)
+
         if self.orientation:
             if self._orient is None:
                 from .orientation import OrientationDetector
                 self._orient = OrientationDetector(num_threads=self.num_threads)
             image, _applied, _conf = self._orient.correct(image)
-
-        # Препроцессинг: выпрямление наклона (deskew), по умолчанию ВКЛ
-        if self.deskew:
-            from .deskew import deskew_image
-            image, _ = deskew_image(image)
 
         # UVDoc unwarp (опц.): расправить изгиб перед OCR. С self-gate — берём оригинал ИЛИ дьюарп
         # по читаемости (не хуже оригинала на плоских). Без гейта — blanket-дьюарп.

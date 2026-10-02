@@ -161,8 +161,14 @@ def oriented_crop(image: np.ndarray, region: TextRegion,
     else:
         dst = np.array([[0, 0], [W, 0], [W, H], [0, H]], dtype=np.float32)
     M = cv2.getPerspectiveTransform(q.astype(np.float32), dst)   # page → crop
+    try:
+        inv = np.linalg.inv(M)                                   # crop → page (восстановление координат)
+    except np.linalg.LinAlgError:
+        # вырожденный трансформ (коллинеарный/битый quad) — осевой кроп как фолбэк, без warp
+        x0, y0, x1, y1 = [int(round(v)) for v in region.bbox_xyxy]
+        return image[max(0, y0):max(1, y1), max(0, x0):max(1, x1)]
     region.transform_to_crop = M
-    region.transform_to_page = np.linalg.inv(M)                  # crop → page (восстановление координат)
+    region.transform_to_page = inv
     return cv2.warpPerspective(image, M, (W, H), flags=cv2.INTER_LINEAR,
                                borderMode=cv2.BORDER_REPLICATE)
 
@@ -195,6 +201,8 @@ def unstack_vertical_text(image: np.ndarray, canon_h: int = 48, gap_ratio: float
     с крошечным (не пробельным) зазором, фон = медиана background. Возвращает mapping x→bbox_in_crop.
 
     ЭТО image-transform, а не распознавание по GT. Если <2 полос → ok=False (регион не stack)."""
+    if image is None or image.size == 0 or image.shape[0] < 6 or image.shape[1] < 3:
+        return UnstackResult(image, 1, [], ok=False)            # пустой/крошечный кроп — не stack
     gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     H, W = gray.shape[:2]
     if H < 6 or W < 3:
