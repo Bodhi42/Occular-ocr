@@ -143,6 +143,9 @@ print(Settings())
 | `gpu` | `False` | Run on **GPU via PyTorch/CUDA**. Needs `occular-ocr[gpu]` (torch+torchvision); falls back to CPU (ONNX) if unavailable. |
 | `orientation` | `False` | Detect a 0/90/180/270° page rotation and straighten it before detection — for phone photos and bulk scans that arrive sideways. Applied only when the model is at least 0.8 confident. |
 | `deskew` | `True` | Auto-correct skewed scans (a few degrees) before detection. |
+| `unwarp` | `None` | Neural dewarping (UVDoc) for curved or photographed pages. `None` → off. A Hugging Face model id or local folder with weights (e.g. `"Shivin11/occular-uvdoc"`), or a ready `UVDocUnwarper`. Needs `occular-ocr[unwarp]`. |
+| `unwarp_gate` | `True` | How to decide whether to apply the dewarp (when `unwarp` is set). `True` → readability self-gate: apply only if it improves text readability by at least `unwarp_margin`×. `False`/`None` → always apply. A number → use it as the readability threshold. A callable `(res_orig, res_dewarped) -> bool` → your own rule. |
+| `unwarp_margin` | `1.05` | Readability multiplier for the default gate (`unwarp_gate=True`). Higher → dewarp fires less often, but only when it clearly helps. |
 | `lm` | `True` | Beam search + language model (best quality). `False` → fast greedy decoding, skips the LM download. |
 | `reading_order` | `False` | Order lines for multi-column layouts (downloads a small model on first use). |
 | `languages` | `None` | Text language(s). `None` → Russian/English. A list of codes (e.g. `["uk"]`) or `"auto"` enables the multilingual model (12 more Cyrillic-script languages). See [Languages](#languages). |
@@ -159,6 +162,9 @@ pipe = OCRPipeline(Settings(
     gpu=False,            # True -> PyTorch/CUDA (needs occular-ocr[gpu])
     orientation=False,    # detect 0/90/180/270 rotation and straighten the page
     deskew=True,          # auto-correct skewed scans
+    unwarp=None,          # UVDoc dewarp for curved/photo pages: "Shivin11/occular-uvdoc" or a local folder (needs occular-ocr[unwarp])
+    unwarp_gate=True,     # True -> apply only if it improves readability (x unwarp_margin); False -> always; number -> custom threshold; callable -> your rule
+    unwarp_margin=1.05,   # readability multiplier for the default unwarp gate
     lm=True,              # beam + language model; False -> greedy (faster, no LM download)
     reading_order=False,  # multi-column reading order (optional model, see below)
     detector=None,        # None = default detector
@@ -488,12 +494,16 @@ print(Settings())
 |---|---|---|
 | `num_threads` | `None` | CPU-потоки для инференса. `None` → `min(ядра, 4)`. |
 | `gpu` | `False` | Гонять на **GPU через PyTorch/CUDA**. Нужен `occular-ocr[gpu]` (torch+torchvision); при отсутствии — откат на CPU (ONNX). |
-| `deskew` | `True` | Автовыпрямление наклонённых / повёрнутых сканов перед детекцией. |
+| `orientation` | `False` | Определять поворот страницы 0/90/180/270° и выпрямлять до детекции — для фото с телефона и массовых сканов, приходящих боком. Срабатывает только при уверенности модели ≥ 0.8. |
+| `deskew` | `True` | Автовыпрямление наклонённых сканов (несколько градусов) перед детекцией. |
+| `unwarp` | `None` | Нейро-расправление изгиба (UVDoc) для изогнутых или сфотографированных страниц. `None` → выкл. Строка — HF model id или локальная папка с весами (напр. `"Shivin11/occular-uvdoc"`), либо готовый `UVDocUnwarper`. Нужен `occular-ocr[unwarp]`. |
+| `unwarp_gate` | `True` | Чем решать, применять ли расправление (когда `unwarp` задан). `True` → гейт по читаемости: применять, только если текст стал читаемее минимум в `unwarp_margin`× раз. `False`/`None` → применять всегда. Число → использовать как порог читаемости. Callable `(res_orig, res_dewarped) -> bool` → свой критерий. |
+| `unwarp_margin` | `1.05` | Порог-множитель читаемости для дефолтного гейта (`unwarp_gate=True`). Больше → расправление срабатывает реже, но только когда явно помогает. |
 | `lm` | `True` | Beam + языковая модель (лучшее качество). `False` → быстрое жадное декодирование, без скачивания LM. |
 | `reading_order` | `False` | Упорядочивание строк для многоколоночных макетов (докачивает небольшую модель при первом запуске). |
 | `languages` | `None` | Язык(и) текста. `None` → русский/английский. Список кодов (напр. `["uk"]`) или `"auto"` включает многоязычную модель (ещё 12 языков на кириллице). См. [Языки](#языки). |
 | `detector` | `None` | Явное имя детектора. `None` → по умолчанию. |
-| `recognizer` | `None` | Явное имя распознавателя. `None` → по умолчанию. |
+| `recognizer` | `None` | Архитектура распознавателя: `"svtr_lcnet"` (по умолчанию — лёгкая, ~5× быстрее на CPU) или `"svtr_t"` (крупная; единственная поддерживается на GPU). |
 
 ### Пайплайн со всеми настройками
 
@@ -503,11 +513,15 @@ from occular import OCRPipeline, Settings
 pipe = OCRPipeline(Settings(
     num_threads=8,        # CPU-потоки (None -> min(ядра, 4))
     gpu=False,            # True -> PyTorch/CUDA (нужен occular-ocr[gpu])
+    orientation=False,    # определять поворот 0/90/180/270 и выпрямлять страницу
     deskew=True,          # автовыпрямление наклона
+    unwarp=None,          # UVDoc-расправление изгиба: "Shivin11/occular-uvdoc" или локальная папка (нужен occular-ocr[unwarp])
+    unwarp_gate=True,     # True -> применять, только если стало читаемее (x unwarp_margin); False -> всегда; число -> свой порог; callable -> свой критерий
+    unwarp_margin=1.05,   # порог-множитель читаемости для дефолтного гейта
     lm=True,              # beam + языковая модель; False -> жадное (быстрее, без скачивания LM)
     reading_order=False,  # порядок чтения для многоколоночных (опц. модель, см. ниже)
     detector=None,        # None = детектор по умолчанию
-    recognizer=None,      # None = распознаватель по умолчанию
+    recognizer=None,      # None = svtr_lcnet; "svtr_t" = крупная модель
 ))
 
 result = pipe.process_image("document.png")
