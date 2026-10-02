@@ -51,7 +51,7 @@ certificates, invoices and IDs.
     <img src="assets/benchmark_opendocs.png" width="90%" alt="opendocs page-level benchmark — Occular-OCR ranks #1 by character error rate against large vision-language models, Yandex Vision, Surya, Tesseract, PP-OCRv6-RU, RapidOCR and others">
   </picture>
 </p>
-<p align="center"><sub>Character error rate (per-page mean, capped) on <b>113 real Russian document pages</b>, scored against an independent human relabel of every page. Lower is better.</sub></p>
+<p align="center"><sub>Character error rate (per-page mean, capped) on <b>113 real Russian document pages</b>, scored against an independent, per-page ground truth built with Fable. Lower is better.</sub></p>
 
 The pages are a cross-section of everyday Russian paperwork — powers of attorney, bank
 statements, invoices and VAT invoices, passports and IDs, contracts, certificates, applications
@@ -404,7 +404,7 @@ Occular-OCR заточен под русский и читает его знач
     <img src="assets/benchmark_opendocs.png" width="90%" alt="Постраничный бенчмарк opendocs — Occular-OCR на 1-м месте по ошибке символов против больших vision-language моделей, Yandex Vision, Surya, Tesseract, PP-OCRv6-RU, RapidOCR и других">
   </picture>
 </p>
-<p align="center"><sub>Ошибка символов (средняя по страницам, с отсечкой) на <b>113 реальных страницах русских документов</b>, против независимой человеческой переразметки каждой страницы. Меньше — лучше.</sub></p>
+<p align="center"><sub>Ошибка символов (средняя по страницам, с отсечкой) на <b>113 реальных страницах русских документов</b>, против независимой постраничной эталонной разметки, сделанной с помощью Fable. Меньше — лучше.</sub></p>
 
 Страницы — срез повседневного российского документооборота: доверенности, банковские выписки,
 счета и счёта-фактуры, паспорта и удостоверения, договоры, свидетельства, заявления и чеки.
