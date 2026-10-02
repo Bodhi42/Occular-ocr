@@ -53,6 +53,13 @@ certificates, invoices and IDs.
 </p>
 <p align="center"><sub>Character error rate (per-page mean, capped) on <b>113 real Russian document pages</b>, scored against an independent human relabel of every page. Lower is better.</sub></p>
 
+The pages are a cross-section of everyday Russian paperwork — powers of attorney, bank
+statements, invoices and VAT invoices, passports and IDs, contracts, certificates, applications
+and receipts. Because every page is a genuine document carrying private individuals' personal
+data, **the benchmark itself is not published.** That is also exactly why it matters: these are
+real, in-the-wild production documents, so the numbers reflect how OCR actually behaves on live
+document workloads far better than any synthetic or public dataset can.
+
 - **Russian-first accuracy.** Trained and tuned on Russian document data. Where other engines guess,
   Occular-OCR reads.
 - **Beam + language model, on by default.** A Russian n-gram language model cuts word errors
@@ -398,6 +405,12 @@ Occular-OCR заточен под русский и читает его знач
   </picture>
 </p>
 <p align="center"><sub>Ошибка символов (средняя по страницам, с отсечкой) на <b>113 реальных страницах русских документов</b>, против независимой человеческой переразметки каждой страницы. Меньше — лучше.</sub></p>
+
+Страницы — срез повседневного российского документооборота: доверенности, банковские выписки,
+счета и счёта-фактуры, паспорта и удостоверения, договоры, свидетельства, заявления и чеки.
+Поскольку каждая страница — настоящий документ с персональными данными физлиц, **сам бенчмарк
+не публикуется.** В этом же и его ценность: это реальные боевые документы, поэтому цифры отражают
+работу OCR на живом документопотоке гораздо лучше, чем любой синтетический или публичный набор.
 
 - **Точность под русский.** Обучен и настроен на русских документах. Там, где другие движки гадают,
   Occular-OCR читает.
