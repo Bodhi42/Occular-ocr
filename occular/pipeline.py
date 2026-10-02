@@ -33,7 +33,8 @@ class OCRPipeline:
                  detector_kwargs: dict = None, recognizer_kwargs: dict = None,
                  deskew: bool = True, reading_order: bool = False, lm: bool = True,
                  num_threads: int = None, gpu: bool = False, orientation: bool = False,
-                 oriented_lines: bool = None, unwarp=None, unwarp_gate: bool = True):
+                 oriented_lines: bool = None, unwarp=None, unwarp_gate=True,
+                 unwarp_margin: float = 1.05):
         """
         Args:
             detector_name: имя детектора (по умолчанию 'dbnet-onnx')
@@ -49,13 +50,23 @@ class OCRPipeline:
                 чтобы принудительно оторвать per-crop ориентацию от deskew (обратная совместимость).
             num_threads: число CPU-ядер для инференса (None = min(доступные, 4))
             gpu: исполнять на GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu]; иначе фолбэк на CPU)
-            unwarp: опц. нейросетевое расправление изгиба (UVDoc). None = выкл (по умолч).
+            unwarp: опц. нейросетевое расправление изгиба (UVDoc). None = ВЫКЛ (по умолч).
                 Строка = HF model_id/локальная папка с весами (ленивая загрузка), либо готовый
                 UVDocUnwarper. Требует extra [unwarp]. Тяжёлый препроцесс для фото/смятых страниц.
-            unwarp_gate: применять unwarp ТОЛЬКО если он повышает читаемость (self-gate по
-                CTC-уверенности рекогнайзера: OCR оригинала vs дьюарпа, берём лучший). ВКЛ по умолч —
-                гарантирует «не хуже оригинала» на плоских сканах ценой доп. прогона OCR на кандидате.
-                False = применять unwarp всегда (blanket, дешевле, но может вредить плоским).
+            unwarp_gate: чем решать, применять ли дьюарп (когда unwarp включён). Варианты:
+                • True (по умолч) — readability self-gate с порогом unwarp_margin: берём дьюарп ТОЛЬКО
+                  если он повышает читаемость (Σ len·conf строк) минимум в unwarp_margin раз. На нашем
+                  домене (мостовые плоские сканы) blanket-дьюарп вредит (+0.006 CER), а этот гейт
+                  разворачивает в плюс (−0.0018 CER, на сработавших медиана ≈ −0.04); стоит доп.
+                  прогона OCR на кандидате.
+                • False/None — blanket: применять unwarp всегда (дешевле на 1 OCR, но вредит плоским).
+                • число (напр. 1.10) — тот же readability-гейт, но со своим порогом-margin (перебивает
+                  unwarp_margin). Больше порог → реже срабатывает, но чище выигрыш.
+                • callable(res_orig, res_dew) -> bool — свой гейт: True = взять дьюарп. res_* это списки
+                  результатов OCR ({text, confidence, quad}) для оригинала и дьюарпа.
+            unwarp_margin: порог-множитель для дефолтного readability-гейта (unwarp_gate=True).
+                Дьюарп берётся если read(дьюарп) > read(оригинал)·unwarp_margin. По умолч 1.05
+                (осторожно: ~3% срабатываний, лучшее соотношение луч/хуж ≈ 3:1).
         """
         detector_kwargs = detector_kwargs or {}
         recognizer_kwargs = recognizer_kwargs or {}
@@ -96,7 +107,9 @@ class OCRPipeline:
         # UVDoc unwarp: None = выкл; строка = ленивый model_id/папка; иначе готовый инстанс.
         self._unwarp_arg = unwarp
         self._unwarp = unwarp if (unwarp is not None and not isinstance(unwarp, str)) else None
-        self.unwarp_gate = bool(unwarp_gate)
+        # True=readability×margin, False/None=blanket, число=readability×это, callable=свой гейт
+        self.unwarp_gate = unwarp_gate
+        self.unwarp_margin = float(unwarp_margin)
 
     def process_image(self, image_path: str) -> List[Dict]:
         """
@@ -128,19 +141,29 @@ class OCRPipeline:
         # по читаемости (не хуже оригинала на плоских). Без гейта — blanket-дьюарп.
         if self._unwarp_arg is not None:
             self._ensure_unwarp()
+            # False/None = blanket: применяем дьюарп без гейта (1 OCR)
             if not self.unwarp_gate:
                 image = self._unwarp.unwarp(image)
                 return self._ocr_page(image)
+            # гейт: OCR оригинала vs дьюарпа, решаем через _use_dewarp
             res_orig = self._ocr_page(image)
             try:
                 dew = self._unwarp.unwarp(image)
                 res_dew = self._ocr_page(dew)
             except Exception:
                 return res_orig
-            # берём дьюарп, только если он читается лучше (Σ len·conf строк)
-            return res_dew if self._readability(res_dew) > self._readability(res_orig) else res_orig
+            return res_dew if self._use_dewarp(res_orig, res_dew) else res_orig
 
         return self._ocr_page(image)
+
+    def _use_dewarp(self, res_orig: List[Dict], res_dew: List[Dict]) -> bool:
+        """Решение гейта: брать ли дьюарп. callable → свой предикат; число → readability×это;
+        True → readability×self.unwarp_margin (дефолт 1.05)."""
+        gate = self.unwarp_gate
+        if callable(gate):
+            return bool(gate(res_orig, res_dew))
+        margin = self.unwarp_margin if gate is True else float(gate)
+        return self._readability(res_dew) > self._readability(res_orig) * margin
 
     def _ocr_page(self, image: np.ndarray) -> List[Dict]:
         """OCR уже препроцессенной страницы: reading_order по регионам или обычный проход."""
