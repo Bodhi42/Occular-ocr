@@ -45,6 +45,14 @@ ranking **#1** against large vision-language models and other leading OCR engine
 document benchmark. The gap is widest exactly where general-purpose OCR struggles: dense forms,
 certificates, invoices and IDs.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark_opendocs_dark.png">
+    <img src="assets/benchmark_opendocs.png" width="90%" alt="opendocs page-level benchmark — Occular-OCR ranks #1 by character error rate against large vision-language models, Yandex Vision, Surya, Tesseract, PP-OCRv6-RU, RapidOCR and others">
+  </picture>
+</p>
+<p align="center"><sub>Character error rate (per-page mean, capped) on <b>113 real Russian document pages</b>, scored against an independent human relabel of every page. Lower is better.</sub></p>
+
 - **Russian-first accuracy.** Trained and tuned on Russian document data. Where other engines guess,
   Occular-OCR reads.
 - **Beam + language model, on by default.** A Russian n-gram language model cuts word errors
@@ -382,6 +390,14 @@ Occular-OCR заточен под русский и читает его знач
 **~35 % меньше ошибок слов, чем ближайший open-source-движок** в сквозном бенчмарке, и **#1** против
 больших vision-language моделей и других ведущих OCR-движков на постраничном бенчмарке. Разрыв
 максимален там, где универсальный OCR буксует: плотные формы, справки, счета, удостоверения.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark_opendocs_dark.png">
+    <img src="assets/benchmark_opendocs.png" width="90%" alt="Постраничный бенчмарк opendocs — Occular-OCR на 1-м месте по ошибке символов против больших vision-language моделей, Yandex Vision, Surya, Tesseract, PP-OCRv6-RU, RapidOCR и других">
+  </picture>
+</p>
+<p align="center"><sub>Ошибка символов (средняя по страницам, с отсечкой) на <b>113 реальных страницах русских документов</b>, против независимой человеческой переразметки каждой страницы. Меньше — лучше.</sub></p>
 
 - **Точность под русский.** Обучен и настроен на русских документах. Там, где другие движки гадают,
   Occular-OCR читает.
