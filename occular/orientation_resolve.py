@@ -72,6 +72,15 @@ def _cand_score(text: str, conf: float) -> float:
     return conf
 
 
+def _digit_dominant(text: str) -> bool:
+    """Цифро-доминантный ран (как в code_lock): ≥2 цифр и ≥50% цифр среди alnum.
+    Перевёрнутые цифры читаются с высокой conf (мусор), поэтому lowconf-гейт пробы 180° их не ловит —
+    для таких строк пробуем 180° всегда (сам флип по-прежнему только если бьёт LINE_0 на flip_margin)."""
+    al = [ch for ch in text if ch.isalnum()]
+    nd = sum(ch.isdigit() for ch in al)
+    return nd >= 2 and nd >= 0.5 * max(len(al), 1)
+
+
 def _orientation_from(region: TextRegion, cand: str) -> Tuple[int, str]:
     """orientation_deg (0/90/180/270) и layout_type по выбранному LINE-кандидату и углу оси."""
     ang = abs(region.local_angle_deg or 0.0)
@@ -127,8 +136,9 @@ def _resolve_region_impl(image: np.ndarray, region: TextRegion, recognizer,
         crop = _axial_crop(image, region) if ang < cfg.axial_angle else oriented_crop(image, region)
         text, conf = _score_crop(recognizer, crop)
         scores["LINE_0"] = round(_cand_score(text, conf), 4)
-        # предохранитель: очень низкая conf → вдруг строка вверх ногами; пробуем 180, берём ТОЛЬКО с маржой
-        if conf < cfg.lowconf_probe:
+        # пробуем 180: при низкой conf (вдруг вверх ногами) ИЛИ для цифро-доминантных строк
+        # (перевёрнутые цифры читаются уверенным мусором → lowconf-гейт их пропускал). Флип — только с маржой.
+        if conf < cfg.lowconf_probe or _digit_dominant(text):
             t180, c180 = _score_crop(recognizer, cv2.rotate(crop, cv2.ROTATE_180))
             scores["LINE_180"] = round(_cand_score(t180, c180), 4)
             if scores["LINE_180"] >= scores["LINE_0"] + cfg.flip_margin:
