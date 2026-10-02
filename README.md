@@ -48,7 +48,7 @@ certificates, invoices and IDs.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark_opendocs_dark.png">
-    <img src="assets/benchmark_opendocs.png" width="90%" alt="opendocs page-level benchmark — Occular-OCR ranks #1 by character error rate against large vision-language models, Yandex Vision, Surya, Tesseract, PP-OCRv6-RU, RapidOCR and others">
+    <img src="assets/benchmark_opendocs.png" width="90%" alt="opendocs page-level benchmark — Occular-OCR ranks #1 by character error rate against large vision-language models, Yandex Vision, Surya, Tesseract, RapidOCR and others">
   </picture>
 </p>
 <p align="center"><sub>Character error rate (per-page mean, capped) on <b>113 real Russian document pages</b>, scored against an independent, per-page ground truth built with Fable. Lower is better.</sub></p>
@@ -407,7 +407,7 @@ Occular-OCR заточен под русский и читает его знач
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark_opendocs_dark.png">
-    <img src="assets/benchmark_opendocs.png" width="90%" alt="Постраничный бенчмарк opendocs — Occular-OCR на 1-м месте по ошибке символов против больших vision-language моделей, Yandex Vision, Surya, Tesseract, PP-OCRv6-RU, RapidOCR и других">
+    <img src="assets/benchmark_opendocs.png" width="90%" alt="Постраничный бенчмарк opendocs — Occular-OCR на 1-м месте по ошибке символов против больших vision-language моделей, Yandex Vision, Surya, Tesseract, RapidOCR и других">
   </picture>
 </p>
 <p align="center"><sub>Ошибка символов (средняя по страницам, с отсечкой) на <b>113 реальных страницах русских документов</b>, против независимой постраничной эталонной разметки, сделанной с помощью Fable. Меньше — лучше.</sub></p>
