@@ -16,7 +16,7 @@ Occular OCR Package
     ocr document.pdf --workers 4
 """
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 import os
 from typing import Union, List, Dict, Optional
@@ -199,7 +199,10 @@ class OCRPipeline:
         detector: Optional[str] = None,
         recognizer: Optional[str] = None,
         languages=None,
-        orientation: bool = False
+        orientation: bool = False,
+        unwarp=None,
+        unwarp_gate=True,
+        unwarp_margin: float = 1.05
     ):
         _ensure_registered()
 
@@ -207,7 +210,8 @@ class OCRPipeline:
         if settings is None:
             settings = Settings(deskew=deskew, reading_order=reading_order, lm=lm,
                                 num_threads=num_threads, gpu=gpu, orientation=orientation,
-                                detector=detector, recognizer=recognizer, languages=languages)
+                                detector=detector, recognizer=recognizer, languages=languages,
+                                unwarp=unwarp, unwarp_gate=unwarp_gate, unwarp_margin=unwarp_margin)
         self.settings = settings
         s = settings
 
@@ -238,7 +242,10 @@ class OCRPipeline:
             reading_order=s.reading_order,
             lm=s.lm,
             num_threads=s.num_threads,
-            gpu=s.gpu
+            gpu=s.gpu,
+            unwarp=s.unwarp,
+            unwarp_gate=s.unwarp_gate,
+            unwarp_margin=s.unwarp_margin
         )
 
     def process_image(self, image_path: str) -> List[Dict]:

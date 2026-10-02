@@ -34,6 +34,11 @@ class Settings:
     # --- препроцессинг ---
     orientation: bool = False             # определять поворот страницы (0/90/180/270°) и выпрямлять; ВЫКЛ по умолчанию
     deskew: bool = True                   # выпрямлять наклон скана перед детекцией
+    # Нейро-расправление изгиба (UVDoc): None = ВЫКЛ (по умолч). Строка = HF model_id или локальная
+    # папка с весами (напр. "Shivin11/occular-uvdoc"), либо готовый UVDocUnwarper. Нужен extra [unwarp].
+    unwarp: Union[None, str, object] = None
+    unwarp_gate: Union[bool, float] = True   # True=readability-гейт×unwarp_margin; False/None=всегда; число=свой порог; callable(res_orig,res_dew)->bool
+    unwarp_margin: float = 1.05           # порог-множитель читаемости для дефолтного гейта (unwarp_gate=True)
 
     # --- декодирование ---
     lm: bool = True                       # beam-CTC + языковая модель (−25% WER; качает LM с HF при 1-м запуске)
@@ -59,6 +64,7 @@ class Settings:
             f"  languages     = {self.languages or 'ru/en (по умолчанию)'}  (None=ru/en; список кодов или 'auto'=мультиязычный)\n"
             f"  orientation   = {self.orientation}  (препроцессинг: поворот страницы 0/90/180/270°)\n"
             f"  deskew        = {self.deskew}   (препроцессинг: выпрямление наклона)\n"
+            f"  unwarp        = {self.unwarp if self.unwarp is not None else 'None (выкл)'}  (препроцессинг: UVDoc-расправление изгиба; нужен extra [unwarp])\n"
             f"  lm            = {self.lm}   (beam-CTC + языковая модель; −25% WER, качает LM с HF)\n"
             f"  reading_order = {self.reading_order}  (постпроцессинг: порядок чтения, нужна докачка)\n"
             f"  detector      = {self.detector or 'авто'}\n"
