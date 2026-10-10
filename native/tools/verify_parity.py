@@ -77,7 +77,10 @@ def main():
         t_py = time.time() - t
 
         t = time.time()
-        rs_txt = [txt for txt, _ in native.decode_many(logits)]
+        # сырой выход нативного декодера: decode_many у LMDecoder дополнительно применяет замок кодов
+        # (code_lock), а питоновская сторона выше — сырой beam; сравниваем одинаковое
+        batch = [np.ascontiguousarray(x[0], np.float32) for x in logits]
+        rs_txt = [txt for txt, _ in native.native.decode_batch(batch)]
         t_rs = time.time() - t
 
         bad = [(a, b) for a, b in zip(py_txt, rs_txt) if a != b]

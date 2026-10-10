@@ -24,7 +24,7 @@ class Settings:
 
     # --- производительность ---
     num_threads: Optional[int] = None    # число CPU-ядер; None = min(доступные, 4)
-    gpu: bool = False                     # исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
+    gpu: bool = False                     # исполнять на GPU/CUDA через ONNX Runtime (библиотеки CUDA: occular-ocr[gpu]; иначе CPU)
 
     # --- языки ---
     # None = русская модель (ru/en). Список кодов (напр. ['uk'] или ['ru','kk','uk']) или 'auto' =
@@ -60,7 +60,7 @@ class Settings:
         return (
             "Настройки Occular-OCR:\n"
             f"  num_threads   = {self.num_threads}  (эффективно {self.resolved_threads()}; None = min(ядра,4))\n"
-            f"  gpu           = {self.gpu}  (GPU/CUDA; нужен onnxruntime-gpu, иначе CPU)\n"
+            f"  gpu           = {self.gpu}  (GPU/CUDA; библиотеки CUDA: occular-ocr[gpu], иначе CPU)\n"
             f"  languages     = {self.languages or 'ru/en (по умолчанию)'}  (None=ru/en; список кодов или 'auto'=мультиязычный)\n"
             f"  orientation   = {self.orientation}  (препроцессинг: поворот страницы 0/90/180/270°)\n"
             f"  deskew        = {self.deskew}   (препроцессинг: выпрямление наклона)\n"

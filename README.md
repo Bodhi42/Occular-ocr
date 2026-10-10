@@ -84,7 +84,8 @@ pip install occular-ocr
 ```
 
 That's it. No build tools, no CUDA. Model weights download automatically on first use and are cached
-locally.
+locally. Requires a platform with ONNX Runtime wheels: Linux and Windows (x86_64), Linux aarch64 and
+macOS — except Intel Macs on Python 3.14, where ONNX Runtime has no build yet (use Python ≤ 3.13).
 
 ### GPU (optional)
 
@@ -148,10 +149,10 @@ print(Settings())
 | `unwarp_gate` | `True` | How to decide whether to apply the dewarp (when `unwarp` is set). `True` → readability self-gate: apply only if it improves text readability by at least `unwarp_margin`×. `False`/`None` → always apply. A number → use it as the readability threshold. A callable `(res_orig, res_dewarped) -> bool` → your own rule. |
 | `unwarp_margin` | `1.05` | Readability multiplier for the default gate (`unwarp_gate=True`). Higher → dewarp fires less often, but only when it clearly helps. |
 | `lm` | `True` | Beam search + language model (best quality). `False` → fast greedy decoding, skips the LM download. |
-| `reading_order` | `False` | Order lines for multi-column layouts (downloads a small model on first use). |
+| `reading_order` | `False` | Order lines for multi-column layouts. Needs an optional model: call `download_reading_order()` once first (see [below](#optional-reading-order-for-multi-column-pages)). |
 | `languages` | `None` | Text language(s). `None` → Russian/English. A list of codes (e.g. `["uk"]`) or `"auto"` enables the multilingual model (12 more Cyrillic-script languages). See [Languages](#languages). |
 | `detector` | `None` | Explicit detector name. `None` → default. |
-| `recognizer` | `None` | Recognizer architecture: `"svtr_lcnet"` (default — light, ~5× faster on CPU) or `"svtr_t"` (the larger model; the only one supported on GPU). |
+| `recognizer` | `None` | Recognizer architecture: `"svtr_lcnet"` (default — light, ~5× faster on CPU) or `"svtr_t"` (the larger model). Both run on CPU and GPU. |
 
 ### Full pipeline with every setting
 
@@ -251,6 +252,9 @@ ocr document.png --out result.json
 | Flag | Default | What it does |
 |---|---|---|
 | `--gpu` | off | Run on GPU (CUDA via ONNX Runtime; CUDA libs: occular-ocr[gpu]). |
+| `--languages L` / `--lang L` | ru/en | Text language(s), comma-separated (`uk`, `ru,kk`), or `auto`. |
+| `--orientation` | off | Detect and straighten 0/90/180/270° page rotation. |
+| `--model M` | `svtr_lcnet` | Recognizer architecture: `svtr_lcnet` or `svtr_t`. |
 | `--dpi N` | `300` | PDF render resolution. |
 | `--force-ocr` | off | OCR even vector PDFs. |
 | `--workers N` | auto | Parallel workers (PDF pages / batch files). |
@@ -259,7 +263,7 @@ ocr document.png --out result.json
 
 ### Optional: reading order for multi-column pages
 
-Off by default. The model downloads once from the Hub.
+Off by default. Download the model once; without it `reading_order=True` raises an error that says how to get it.
 
 ```python
 from occular import download_reading_order, OCRPipeline, Settings, model_info
@@ -323,7 +327,9 @@ Weights are fetched automatically on first use and cached:
 |---|---|
 | DBNet text detector | finds text lines on the page |
 | SVTR recognizer | reads text inside each line |
+| Page-orientation model *(optional)* | detects 0/90/180/270° page rotation (`orientation=True`) |
 | Table detector + structure *(optional)* | tables → row/column grid + merged cells |
+| UVDoc *(optional)* | dewarps curved/photographed pages (`unwarp=...`) |
 | Language model | rescoring for the beam decoder |
 | Reading-order model *(optional)* | orders lines for multi-column layouts |
 
@@ -422,6 +428,12 @@ Occular-OCR заточен под русский и читает его знач
   Occular-OCR читает.
 - **Beam + языковая модель по умолчанию.** Русская n-gram языковая модель снижает ошибки слов на
   ~18–25 % относительно жадного декодирования — **без дообучения модели**, просто лучше декодирование.
+- **Быстрый по умолчанию.** Распознаватель по умолчанию (`svtr_lcnet`) читает плотную страницу примерно
+  **в 5 раз быстрее** на CPU, чем прежний, сохраняя 99,6 % его точности. Крупная модель — одним
+  аргументом: `recognizer="svtr_t"`.
+- **Справляется со страницами боком.** Включи `orientation=True` — Occular определит поворот
+  0/90/180/270° и выпрямит страницу перед чтением: для фото с телефона и массовых сканов, приходящих
+  повёрнутыми. По умолчанию выключено; поворачивает, только когда уверен.
 - **Ставится где угодно, без компилятора.** Декодер целиком на чистом Python — топовое качество декода
   с **нулевыми нативными зависимостями**.
 - **Сначала CPU, GPU — по желанию.** Все модели — ONNX, работают на CPU из коробки; `gpu=True`
@@ -437,7 +449,8 @@ pip install occular-ocr
 ```
 
 И всё. Без сборочных инструментов, без CUDA. Веса моделей скачиваются автоматически при первом запуске
-и кэшируются.
+и кэшируются. Нужна платформа, для которой есть сборки ONNX Runtime: Linux и Windows (x86_64), Linux
+aarch64 и macOS — кроме Intel-маков на Python 3.14, где сборки ONNX Runtime пока нет (подойдёт Python ≤ 3.13).
 
 ### GPU (опционально)
 
@@ -501,10 +514,10 @@ print(Settings())
 | `unwarp_gate` | `True` | Чем решать, применять ли расправление (когда `unwarp` задан). `True` → гейт по читаемости: применять, только если текст стал читаемее минимум в `unwarp_margin`× раз. `False`/`None` → применять всегда. Число → использовать как порог читаемости. Callable `(res_orig, res_dewarped) -> bool` → свой критерий. |
 | `unwarp_margin` | `1.05` | Порог-множитель читаемости для дефолтного гейта (`unwarp_gate=True`). Больше → расправление срабатывает реже, но только когда явно помогает. |
 | `lm` | `True` | Beam + языковая модель (лучшее качество). `False` → быстрое жадное декодирование, без скачивания LM. |
-| `reading_order` | `False` | Упорядочивание строк для многоколоночных макетов (докачивает небольшую модель при первом запуске). |
+| `reading_order` | `False` | Упорядочивание строк для многоколоночных макетов. Нужна опциональная модель: один раз вызови `download_reading_order()` (см. [ниже](#опционально-порядок-чтения-для-многоколоночных-страниц)). |
 | `languages` | `None` | Язык(и) текста. `None` → русский/английский. Список кодов (напр. `["uk"]`) или `"auto"` включает многоязычную модель (ещё 12 языков на кириллице). См. [Языки](#языки). |
 | `detector` | `None` | Явное имя детектора. `None` → по умолчанию. |
-| `recognizer` | `None` | Архитектура распознавателя: `"svtr_lcnet"` (по умолчанию — лёгкая, ~5× быстрее на CPU) или `"svtr_t"` (крупная; единственная поддерживается на GPU). |
+| `recognizer` | `None` | Архитектура распознавателя: `"svtr_lcnet"` (по умолчанию — лёгкая, ~5× быстрее на CPU) или `"svtr_t"` (крупная). Обе работают и на CPU, и на GPU. |
 
 ### Пайплайн со всеми настройками
 
@@ -555,6 +568,8 @@ ocr("document.png")                 # CPU (по умолчанию), полно�
 ocr("document.png", gpu=True)       # GPU: CUDA через ONNX Runtime (библиотеки CUDA: occular-ocr[gpu])
 ocr("document.png", lm=False)       # быстрый жадный режим, без скачивания LM
 ocr("document.png", deskew=False)   # без выпрямления наклона
+ocr("photo.jpg",    orientation=True)     # сначала выпрямить страницу, лежащую боком
+ocr("document.png", recognizer="svtr_t")  # крупный распознаватель вместо дефолтного
 ocr("document.png", num_threads=2)  # ограничить CPU-потоки
 ```
 
@@ -602,6 +617,9 @@ ocr document.png --out result.json
 | Флаг | По умолчанию | Что делает |
 |---|---|---|
 | `--gpu` | выкл | Гонять на GPU (CUDA через ONNX Runtime; библиотеки CUDA: occular-ocr[gpu]). |
+| `--languages L` / `--lang L` | ru/en | Язык(и) текста через запятую (`uk`, `ru,kk`) или `auto`. |
+| `--orientation` | выкл | Определять и выпрямлять поворот страницы 0/90/180/270°. |
+| `--model M` | `svtr_lcnet` | Архитектура распознавателя: `svtr_lcnet` или `svtr_t`. |
 | `--dpi N` | `300` | Разрешение рендеринга PDF. |
 | `--force-ocr` | выкл | OCR даже для векторных PDF. |
 | `--workers N` | авто | Параллельные воркеры (страницы PDF / файлы батча). |
@@ -610,7 +628,7 @@ ocr document.png --out result.json
 
 ### Опционально: порядок чтения для многоколоночных страниц
 
-По умолчанию выключено. Модель скачивается один раз.
+По умолчанию выключено. Модель нужно один раз скачать; без неё `reading_order=True` выдаёт ошибку с подсказкой, как это сделать.
 
 ```python
 from occular import download_reading_order, OCRPipeline, Settings, model_info
@@ -674,7 +692,9 @@ search с 4-gram русской языковой моделью. Весь сте
 |---|---|
 | DBNet-детектор текста | находит строки текста на странице |
 | SVTR-распознаватель | читает текст внутри каждой строки |
+| Модель ориентации страницы *(опц.)* | определяет поворот страницы 0/90/180/270° (`orientation=True`) |
 | Детектор + структура таблиц *(опц.)* | таблицы → сетка строк/столбцов + объединённые ячейки |
+| UVDoc *(опц.)* | расправляет изогнутые/сфотографированные страницы (`unwarp=...`) |
 | Языковая модель | rescoring для beam-декодера |
 | Модель порядка чтения *(опц.)* | упорядочивает строки для многоколоночных макетов |
 
