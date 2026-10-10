@@ -16,7 +16,6 @@
 """
 import sys
 import os
-import logging
 import warnings
 import numpy as np
 from pathlib import Path
@@ -24,8 +23,6 @@ from pathlib import Path
 from .model_files import LM_HF_REPO
 from .code_lock import lock_codes as _lock_codes, greedy_ctc as _greedy_ctc
 
-# доброкачественные предупреждения декодера — глушим.
-logging.getLogger("pyctcdecode").setLevel(logging.ERROR)
 
 NPZ = "compact_lm.npz"
 UNIGRAMS = "unigrams.txt"
@@ -157,7 +154,7 @@ class LMDecoder:
         if not beams:
             return "", 0.0
         top = beams[0]
-        text = top[0]                                    # (text, last_word, frames, logit_score, lm_score)
+        text = top[0]                                    # (text, logit_score, combined_score)
         logit_score = float(top[-2])                     # акустический score пути (без LM), ≤ 0
         return self._apply_lock(text, logits_1tc[0]), self._confidence(text, logit_score)
 

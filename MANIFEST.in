@@ -1,4 +1,4 @@
-include LICENSE WEIGHTS_LICENSE.md README.md CHANGELOG.md requirements.txt
+include LICENSE LICENSE-pyctcdecode WEIGHTS_LICENSE.md README.md CHANGELOG.md requirements.txt
 recursive-include occular *.py
 recursive-include occular *.json
 recursive-include ocr_skel *.py

@@ -1,6 +1,6 @@
 """Self-contained n-gram language-model backend for the beam decoder — no native dependencies.
 
-The beam search is pure Python; it only needs a scoring backend. This module provides that backend
+The beam search (``_beam.py``) is pure Python; it only needs a scoring backend. This module provides that backend
 on top of a compact numpy n-gram model, plus a fast prefix checker, so decoding quality and speed
 match a native implementation while everything installs with a plain ``pip``.
 
@@ -8,8 +8,6 @@ The n-gram model lives in ``compact_lm.npz``: for each order, sorted uint64 hash
 (FNV-1a over the words) together with log-probabilities and back-off weights (float32). No word→id
 table is needed — lookups compare hashes directly.
 """
-import sys
-import types
 import bisect
 import numpy as np
 
@@ -103,17 +101,6 @@ class _PrefixChecker:
         return 1 if (i < len(self.w) and self.w[i].startswith(p)) else 0
 
 
-def _register_lm_backend():
-    """Register the scoring backend under the name the beam library expects to import."""
-    m = sys.modules.get("kenlm")
-    if m is None or not getattr(m, "_occular_shim", False):
-        fake = types.ModuleType("kenlm")
-        fake.State = State
-        fake.Model = Model
-        fake._occular_shim = True
-        sys.modules["kenlm"] = fake
-
-
 def build_decoder(labels, npz_path, unigrams, alpha=0.5, beta=1.0):
     """Build a beam decoder over the pure-Python LM backend.
 
@@ -122,12 +109,7 @@ def build_decoder(labels, npz_path, unigrams, alpha=0.5, beta=1.0):
         npz_path: path to compact_lm.npz
         unigrams: full vocabulary word list
     """
-    _register_lm_backend()
-    from pyctcdecode import build_ctcdecoder
-    # build with a small vocabulary seed (fast), then swap in the full fast structures:
-    seed = unigrams[:5000] if len(unigrams) > 5000 else (unigrams or ["а"])
-    dec = build_ctcdecoder(labels, kenlm_model_path=str(npz_path), unigrams=seed, alpha=alpha, beta=beta)
-    lm = dec._language_model
-    lm._char_trie = _PrefixChecker(sorted(unigrams))     # full vocabulary, instant load
-    lm._unigram_set = set(unigrams)
-    return dec
+    from ._beam import BeamSearchDecoder, LanguageModel
+    lm = LanguageModel(Model(str(npz_path)), State, unigrams, _PrefixChecker(sorted(unigrams)),
+                       alpha=alpha, beta=beta)
+    return BeamSearchDecoder(labels, lm)

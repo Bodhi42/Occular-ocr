@@ -49,10 +49,10 @@ class OCRPipeline:
             oriented_lines: УСТАРЕЛО. None (по умолч) = следовать deskew. Задавай True/False только
                 чтобы принудительно оторвать per-crop ориентацию от deskew (обратная совместимость).
             num_threads: число CPU-ядер для инференса (None = min(доступные, 4))
-            gpu: исполнять на GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu]; иначе фолбэк на CPU)
+            gpu: исполнять на GPU/CUDA (ONNX Runtime; библиотеки CUDA — pip install "occular-ocr[gpu]"; иначе фолбэк на CPU)
             unwarp: опц. нейросетевое расправление изгиба (UVDoc). None = ВЫКЛ (по умолч).
                 Строка = HF model_id/локальная папка с весами (ленивая загрузка), либо готовый
-                UVDocUnwarper. Требует extra [unwarp]. Тяжёлый препроцесс для фото/смятых страниц.
+                UVDocUnwarper (ONNX). Тяжёлый препроцесс для фото/смятых страниц.
             unwarp_gate: чем решать, применять ли дьюарп (когда unwarp включён). Варианты:
                 • True (по умолч) — readability self-gate с порогом unwarp_margin: берём дьюарп ТОЛЬКО
                   если он повышает читаемость (Σ len·conf строк) минимум в unwarp_margin раз. На нашем
@@ -135,7 +135,7 @@ class OCRPipeline:
         if self.orientation:
             if self._orient is None:
                 from .orientation import OrientationDetector
-                self._orient = OrientationDetector(num_threads=self.num_threads)
+                self._orient = OrientationDetector(num_threads=self.num_threads, gpu=self.gpu)
             image, _applied, _conf = self._orient.correct(image)
 
         # UVDoc unwarp (опц.): расправить изгиб перед OCR. С self-gate — берём оригинал ИЛИ дьюарп
@@ -176,8 +176,7 @@ class OCRPipeline:
         """Ленивая инициализация UVDocUnwarper из model_id-строки при первом использовании."""
         if self._unwarp is None and isinstance(self._unwarp_arg, str):
             from .unwarp_uvdoc import UVDocUnwarper
-            self._unwarp = UVDocUnwarper(model_id=self._unwarp_arg,
-                                         device="cuda" if self.gpu else "cpu")
+            self._unwarp = UVDocUnwarper(model_id=self._unwarp_arg, gpu=self.gpu)
 
     @staticmethod
     def _readability(results: List[Dict]) -> float:
@@ -307,8 +306,11 @@ class OCRPipeline:
         """
         try:
             import fitz  # PyMuPDF
-        except ImportError:
-            raise ImportError("PyMuPDF required for PDF processing. Install: pip install pymupdf")
+        except ImportError as e:
+            # PyMuPDF — обязательная зависимость; если импорт упал, причина в нём самом (битое колесо,
+            # нет системной библиотеки) — показываем её, а не совет «установите pymupdf».
+            raise ImportError(f"PyMuPDF не импортируется ({e}). Переустановить: "
+                              f"pip install --force-reinstall \"pymupdf>=1.23.1\"") from e
 
         pdf_path = Path(pdf_path)
         if not pdf_path.exists():

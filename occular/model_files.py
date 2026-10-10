@@ -6,7 +6,7 @@
     model_info()          # покажет все модели, их файлы, размер и статус
 
 Веса берутся так: сначала локальный файл в occular/weights/ (если положен), иначе — загрузка
-с HuggingFace в кэш. В sdist/wheel сами веса НЕ упакованы (MANIFEST.in исключает *.onnx/*.pth).
+с HuggingFace в кэш. В sdist/wheel сами веса НЕ упакованы (MANIFEST.in исключает *.onnx).
   • Детектор и распознаватель — ONNX FP32, качаются с HuggingFace при первом запуске (или локально).
   • Порядок чтения (layout) — опционально, качается с HuggingFace, по умолчанию ВЫКЛ.
 """
@@ -105,7 +105,7 @@ MODELS = {
     },
     "Распознаватель svtr_t (крупный, опционально)": {
         "files": ["recognizer_svtr_fp32.onnx", "recognizer_charset.txt"],
-        "desc": "Крупный распознаватель ru/en — для ocr(recognizer='svtr_t') и GPU-пути; "
+        "desc": "Крупный распознаватель ru/en — для ocr(recognizer='svtr_t'); "
                 "локально в weights/ или с HuggingFace",
         "required": False,
     },
@@ -119,11 +119,6 @@ MODELS = {
         "files": ["recognizer_svtr_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt"],
         "desc": "Распознаватель 12 кир-языков (ba be bg cv kk ky mk mn sr tg tt uk), ONNX FP32 — "
                 "для ocr(languages=[...]); локально в weights/ или с HuggingFace",
-        "required": False,
-    },
-    "torch-веса svtr_lcnet для GPU (опционально)": {
-        "files": ["recognizer_svtr_lcnet_fp32.pth", "recognizer_svtr_lcnet_cyr12_fp32.pth"],
-        "desc": "Веса PyTorch для GPU-пути (gpu=True); на CPU не нужны — там исполняется ONNX",
         "required": False,
     },
     "Ориентация страницы (опционально)": {
@@ -144,16 +139,10 @@ MODELS = {
                 "локально в weights/ или с HuggingFace",
         "required": False,
     },
-    "Структура таблиц: split (ONNX, опц.)": {
-        "files": ["table_struct_split_v2_fp32.onnx"],
-        "desc": "Сетка строк/столбцов таблицы, ONNX FP32 (без объединённых ячеек) — фолбэк без torch; "
-                "локально в weights/ или с HuggingFace",
-        "required": False,
-    },
-    "Структура таблиц: split+merge (torch CPU, опц.)": {
-        "files": ["table_struct_split_merge_v2.pt"],
-        "desc": "Полная структура таблицы с объединёнными ячейками (colspan/rowspan) — PyTorch на CPU "
-                "(нужен пакет torch); локально в weights/ или с HuggingFace",
+    "Структура таблиц (опционально)": {
+        "files": ["table_struct_v3_main_fp32.onnx", "table_struct_v3_merge_fp32.onnx"],
+        "desc": "Сетка строк/столбцов + объединённые ячейки (colspan/rowspan), два ONNX-графа FP32 "
+                "(экспорт table_struct_split_merge_v2) — для TableRecognizer; локально в weights/ или с HuggingFace",
         "required": False,
     },
     "Порядок чтения / layout (опционально)": {

@@ -25,20 +25,15 @@ class ReadingOrderModel:
     """Ленивая обёртка над layout-ONNX. Даёт регионы в порядке чтения и переупорядочивает результаты OCR."""
 
     def __init__(self, num_threads: int = 4, gpu: bool = False):
-        import onnxruntime as ort
         enc, dec = _RO_DIR / "encoder.onnx", _RO_DIR / "decoder.onnx"
         if not enc.exists() or not dec.exists():
             raise FileNotFoundError(
                 f"Модель порядка чтения не найдена в {_RO_DIR}.\n"
                 "Скачайте её:  from occular import download_reading_order; download_reading_order()"
             )
-        so = ort.SessionOptions()
-        so.intra_op_num_threads = max(1, int(num_threads))
-        so.inter_op_num_threads = 1
-        from ._runtime import resolve_providers
-        providers = resolve_providers(gpu)     # CPU по умолчанию; CUDA при gpu=True
-        self.enc = ort.InferenceSession(str(enc), so, providers=providers)
-        self.dec = ort.InferenceSession(str(dec), so, providers=providers)
+        from ._runtime import make_session
+        self.enc = make_session(enc, num_threads, gpu)     # CPU по умолчанию; CUDA при gpu=True
+        self.dec = make_session(dec, num_threads, gpu)
 
     def _preprocess(self, image: np.ndarray):
         """RGB numpy -> pixel_values [1,3,1024,1024] (aspect-preserving pad, норма [-1,1]). Вернуть (px, S)."""

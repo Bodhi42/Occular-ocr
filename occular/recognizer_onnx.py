@@ -6,10 +6,8 @@
 
 import sys
 import threading
-import warnings
 import numpy as np
 import cv2
-import onnxruntime as ort
 from typing import List, Tuple
 from pathlib import Path
 from itertools import groupby
@@ -55,10 +53,6 @@ class CRNNRecognizerONNX:
         self._onnx_file = onnx_file  # вариант модели: русская (дефолт) или кириллическая-12
         self._lm_decoder = None
         self._lm_lock = threading.Lock()   # ленивая инициализация LM — потокобезопасно (общий инстанс у PDF-воркеров)
-        self.session = None
-        self._torch = None          # torch-модель на CUDA, если gpu=True и бэкенд доступен
-        self._device = None
-
         from .model_files import ensure_weight
         charset_path = Path(ensure_weight(charset_file))
         # Charset: индекс 0 = CTC blank; символ для класса k = vocab[k-1] (как rec_data.Charset)
@@ -66,38 +60,15 @@ class CRNNRecognizerONNX:
         try: cv2.setNumThreads(max(1, int(num_threads)))  # OpenCV по умолч. берёт все ядра
         except Exception: pass
 
-        # GPU-путь: нативный torch на CUDA (веса .pth). Надёжнее onnxruntime-gpu.
-        if gpu:
-            from ._torch_backend import cuda_available, torch_missing_reason, load_recognizer, REC_PTH_BY_ARCH
-            if family not in REC_PTH_BY_ARCH.get(arch, {}):
-                warnings.warn(f"gpu=True недоступен для {arch!r}/{family!r} (torch-весов нет); "
-                              f"распознавание пойдёт на CPU.")
-                gpu = False
-        if gpu:
-            if cuda_available():
-                self._torch = load_recognizer(len(self.vocab) + 1, "cuda", arch=arch, family=family)
-                self._device = "cuda"
-                print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, GPU/CUDA, PyTorch)", file=sys.stderr)
-                return
-            warnings.warn(f"gpu=True, но GPU-бэкенд недоступен: {torch_missing_reason()}. "
-                          f"Откат на CPU (ONNX).")
-
-        # CPU-путь (по умолчанию и как фолбэк): ONNX Runtime, только CPU.
-        onnx_path = Path(ensure_weight(self._onnx_file))
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = max(1, int(num_threads))
-        sess_options.inter_op_num_threads = 1
-        self.session = ort.InferenceSession(str(onnx_path), sess_options=sess_options,
-                                            providers=["CPUExecutionProvider"])
+        from ._runtime import make_session, session_on_gpu
+        self.session = make_session(ensure_weight(self._onnx_file), num_threads, gpu)
         self.input_name = self.session.get_inputs()[0].name  # 'x'
-        print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, CPU, threads={sess_options.intra_op_num_threads})", file=sys.stderr)
+        print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, "
+              f"{'GPU/CUDA' if session_on_gpu(self.session) else 'CPU'}, threads={max(1, int(num_threads))})",
+              file=sys.stderr)
 
     def _infer(self, batch: np.ndarray) -> np.ndarray:
-        """batch [B,3,48,W] fp32 -> логиты [B,T,C]. torch/CUDA если включён, иначе ONNX/CPU."""
-        if self._torch is not None:
-            from ._torch_backend import infer
-            return infer(self._torch, batch, self._device).cpu().numpy()
+        """batch [B,3,48,W] fp32 -> логиты [B,T,C] (ONNX Runtime, CPU или CUDA)."""
         return self.session.run(None, {self.input_name: batch})[0]
 
     def _ensure_lm(self):

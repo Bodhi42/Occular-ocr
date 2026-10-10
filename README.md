@@ -72,7 +72,7 @@ document workloads far better than any synthetic or public dataset can.
   in rotated. Off by default; it only rotates when it is confident.
 - **Installs anywhere, no compiler.** The decoder is pure Python end to end, so you get top-tier
   decoding quality with **zero native dependencies**.
-- **CPU-first, GPU-ready.** Ships as ONNX and runs on CPU out of the box; set `gpu=True` to run natively on PyTorch/CUDA (`occular-ocr[gpu]`).
+- **CPU-first, GPU-ready.** Every model is ONNX and runs on CPU out of the box; set `gpu=True` to run the same models on CUDA through ONNX Runtime — no PyTorch.
 - **Batteries included.** Images and PDF, folder → `.txt`, reading order, automatic deskew.
 
 ---
@@ -88,16 +88,17 @@ locally.
 
 ### GPU (optional)
 
-On GPU the pipeline runs natively on **PyTorch/CUDA** (more robust across CUDA/cuDNN versions than
-onnxruntime-gpu). It uses the same trained weights, so output matches the CPU path bit-for-bit.
-Install the GPU extra:
+Every model is ONNX; on GPU the same files run on CUDA through ONNX Runtime, so there are no extra
+weights and no PyTorch. On Linux and Windows the base install already uses the GPU build of ONNX
+Runtime (it runs on CPU just as fast when there is no GPU). The extra only adds the CUDA and cuDNN
+libraries from pip, so you need nothing but an NVIDIA driver:
 
 ```bash
-pip install occular-ocr[gpu]      # pulls in torch + torchvision
+pip install "occular-ocr[gpu]"    # CUDA + cuDNN from pip; no system CUDA needed
 ```
 
-Then pass `gpu=True` (see below). The PyTorch weights download automatically on first GPU use.
-If PyTorch or CUDA isn't available, it falls back to CPU (ONNX) with a warning.
+Then pass `gpu=True` (see below). If CUDA can't be loaded, Occular says why once and runs on CPU.
+TF32 is disabled on GPU, so the text matches the CPU path.
 
 ---
 
@@ -140,10 +141,10 @@ print(Settings())
 | Setting | Default | What it does |
 |---|---|---|
 | `num_threads` | `None` | CPU threads for inference. `None` → `min(cores, 4)`. |
-| `gpu` | `False` | Run on **GPU via PyTorch/CUDA**. Needs `occular-ocr[gpu]` (torch+torchvision); falls back to CPU (ONNX) if unavailable. |
+| `gpu` | `False` | Run on **GPU (CUDA via ONNX Runtime)**. CUDA libraries: `occular-ocr[gpu]`; falls back to CPU if unavailable. |
 | `orientation` | `False` | Detect a 0/90/180/270° page rotation and straighten it before detection — for phone photos and bulk scans that arrive sideways. Applied only when the model is at least 0.8 confident. |
 | `deskew` | `True` | Auto-correct skewed scans (a few degrees) before detection. |
-| `unwarp` | `None` | Neural dewarping (UVDoc) for curved or photographed pages. `None` → off. A Hugging Face model id or local folder with weights (e.g. `"Shivin11/occular-uvdoc"`), or a ready `UVDocUnwarper`. Needs `occular-ocr[unwarp]`. |
+| `unwarp` | `None` | Neural dewarping (UVDoc) for curved or photographed pages. `None` → off. A Hugging Face model id or local folder with `model.onnx` (e.g. `"Shivin11/occular-uvdoc"`), or a ready `UVDocUnwarper`. Runs on ONNX, no extra dependencies. |
 | `unwarp_gate` | `True` | How to decide whether to apply the dewarp (when `unwarp` is set). `True` → readability self-gate: apply only if it improves text readability by at least `unwarp_margin`×. `False`/`None` → always apply. A number → use it as the readability threshold. A callable `(res_orig, res_dewarped) -> bool` → your own rule. |
 | `unwarp_margin` | `1.05` | Readability multiplier for the default gate (`unwarp_gate=True`). Higher → dewarp fires less often, but only when it clearly helps. |
 | `lm` | `True` | Beam search + language model (best quality). `False` → fast greedy decoding, skips the LM download. |
@@ -159,10 +160,10 @@ from occular import OCRPipeline, Settings
 
 pipe = OCRPipeline(Settings(
     num_threads=8,        # CPU threads (None -> min(cores, 4))
-    gpu=False,            # True -> PyTorch/CUDA (needs occular-ocr[gpu])
+    gpu=False,            # True -> CUDA via ONNX Runtime (CUDA libs: occular-ocr[gpu])
     orientation=False,    # detect 0/90/180/270 rotation and straighten the page
     deskew=True,          # auto-correct skewed scans
-    unwarp=None,          # UVDoc dewarp for curved/photo pages: "Shivin11/occular-uvdoc" or a local folder (needs occular-ocr[unwarp])
+    unwarp=None,          # UVDoc dewarp for curved/photo pages: "Shivin11/occular-uvdoc" or a local folder with model.onnx
     unwarp_gate=True,     # True -> apply only if it improves readability (x unwarp_margin); False -> always; number -> custom threshold; callable -> your rule
     unwarp_margin=1.05,   # readability multiplier for the default unwarp gate
     lm=True,              # beam + language model; False -> greedy (faster, no LM download)
@@ -198,7 +199,7 @@ pages = pipe.process_pdf(
 from occular import ocr
 
 ocr("document.png")                 # CPU (default), full quality
-ocr("document.png", gpu=True)       # GPU via PyTorch/CUDA (needs occular-ocr[gpu])
+ocr("document.png", gpu=True)       # GPU: CUDA via ONNX Runtime (CUDA libs: occular-ocr[gpu])
 ocr("document.png", lm=False)             # fast greedy mode, no LM download
 ocr("document.png", deskew=False)         # skip deskew
 ocr("photo.jpg",    orientation=True)     # straighten a sideways page first
@@ -249,7 +250,7 @@ ocr document.png --out result.json
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--gpu` | off | Run on GPU via PyTorch/CUDA (needs occular-ocr[gpu]). |
+| `--gpu` | off | Run on GPU (CUDA via ONNX Runtime; CUDA libs: occular-ocr[gpu]). |
 | `--dpi N` | `300` | PDF render resolution. |
 | `--force-ocr` | off | OCR even vector PDFs. |
 | `--workers N` | auto | Parallel workers (PDF pages / batch files). |
@@ -290,9 +291,8 @@ for t in tr(page):
           f"{len(t['cells'])} cells")
 ```
 
-Detection and the grid run on ONNX (CPU, no extra dependencies). Merged-cell reconstruction uses a
-small model on CPU when PyTorch is installed (`pip install occular-ocr[gpu]`); without it, you still
-get the row/column grid.
+Detection, the row/column grid and merged cells all run on ONNX (CPU or `gpu=True`), with no extra
+dependencies.
 
 ## Optional: native decoder (faster)
 
@@ -424,8 +424,8 @@ Occular-OCR заточен под русский и читает его знач
   ~18–25 % относительно жадного декодирования — **без дообучения модели**, просто лучше декодирование.
 - **Ставится где угодно, без компилятора.** Декодер целиком на чистом Python — топовое качество декода
   с **нулевыми нативными зависимостями**.
-- **Сначала CPU, GPU — по желанию.** Поставляется как ONNX и работает на CPU из коробки; `gpu=True`
-  гоняет нативно на PyTorch/CUDA (`occular-ocr[gpu]`).
+- **Сначала CPU, GPU — по желанию.** Все модели — ONNX, работают на CPU из коробки; `gpu=True`
+  исполняет те же модели на CUDA через ONNX Runtime — без PyTorch.
 - **Всё в комплекте.** Картинки и PDF, папка → `.txt`, порядок чтения, автоматическое выпрямление наклона.
 
 ---
@@ -441,16 +441,17 @@ pip install occular-ocr
 
 ### GPU (опционально)
 
-На GPU пайплайн работает нативно на **PyTorch/CUDA** (надёжнее onnxruntime-gpu по версиям CUDA/cuDNN).
-Использует те же обученные веса, поэтому результат совпадает с CPU-путём один-в-один. Ставится
-GPU-экстра:
+Все модели — ONNX; на GPU те же файлы исполняются на CUDA через ONNX Runtime, без отдельных весов и
+без PyTorch. На Linux и Windows базовая установка уже ставит GPU-сборку ONNX Runtime (без видеокарты
+она работает на CPU с той же скоростью). Экстра добавляет только библиотеки CUDA и cuDNN из pip —
+нужен лишь драйвер NVIDIA:
 
 ```bash
-pip install occular-ocr[gpu]      # доустанавливает torch + torchvision
+pip install "occular-ocr[gpu]"    # CUDA + cuDNN из pip; системная CUDA не нужна
 ```
 
-Затем передай `gpu=True` (см. ниже). PyTorch-веса скачиваются автоматически при первом GPU-запуске.
-Если PyTorch или CUDA недоступны — откат на CPU (ONNX) с предупреждением.
+Затем передай `gpu=True` (см. ниже). Если CUDA не загрузилась, Occular один раз скажет почему и
+продолжит на CPU. TF32 на GPU выключен, поэтому текст совпадает с CPU-путём.
 
 ---
 
@@ -493,10 +494,10 @@ print(Settings())
 | Настройка | По умолчанию | Что делает |
 |---|---|---|
 | `num_threads` | `None` | CPU-потоки для инференса. `None` → `min(ядра, 4)`. |
-| `gpu` | `False` | Гонять на **GPU через PyTorch/CUDA**. Нужен `occular-ocr[gpu]` (torch+torchvision); при отсутствии — откат на CPU (ONNX). |
+| `gpu` | `False` | Гонять на **GPU (CUDA через ONNX Runtime)**. Библиотеки CUDA — `occular-ocr[gpu]`; при отсутствии — откат на CPU. |
 | `orientation` | `False` | Определять поворот страницы 0/90/180/270° и выпрямлять до детекции — для фото с телефона и массовых сканов, приходящих боком. Срабатывает только при уверенности модели ≥ 0.8. |
 | `deskew` | `True` | Автовыпрямление наклонённых сканов (несколько градусов) перед детекцией. |
-| `unwarp` | `None` | Нейро-расправление изгиба (UVDoc) для изогнутых или сфотографированных страниц. `None` → выкл. Строка — HF model id или локальная папка с весами (напр. `"Shivin11/occular-uvdoc"`), либо готовый `UVDocUnwarper`. Нужен `occular-ocr[unwarp]`. |
+| `unwarp` | `None` | Нейро-расправление изгиба (UVDoc) для изогнутых или сфотографированных страниц. `None` → выкл. Строка — HF model id или локальная папка с `model.onnx` (напр. `"Shivin11/occular-uvdoc"`), либо готовый `UVDocUnwarper`. Работает на ONNX, без доп. зависимостей. |
 | `unwarp_gate` | `True` | Чем решать, применять ли расправление (когда `unwarp` задан). `True` → гейт по читаемости: применять, только если текст стал читаемее минимум в `unwarp_margin`× раз. `False`/`None` → применять всегда. Число → использовать как порог читаемости. Callable `(res_orig, res_dewarped) -> bool` → свой критерий. |
 | `unwarp_margin` | `1.05` | Порог-множитель читаемости для дефолтного гейта (`unwarp_gate=True`). Больше → расправление срабатывает реже, но только когда явно помогает. |
 | `lm` | `True` | Beam + языковая модель (лучшее качество). `False` → быстрое жадное декодирование, без скачивания LM. |
@@ -512,10 +513,10 @@ from occular import OCRPipeline, Settings
 
 pipe = OCRPipeline(Settings(
     num_threads=8,        # CPU-потоки (None -> min(ядра, 4))
-    gpu=False,            # True -> PyTorch/CUDA (нужен occular-ocr[gpu])
+    gpu=False,            # True -> CUDA через ONNX Runtime (библиотеки CUDA: occular-ocr[gpu])
     orientation=False,    # определять поворот 0/90/180/270 и выпрямлять страницу
     deskew=True,          # автовыпрямление наклона
-    unwarp=None,          # UVDoc-расправление изгиба: "Shivin11/occular-uvdoc" или локальная папка (нужен occular-ocr[unwarp])
+    unwarp=None,          # UVDoc-расправление изгиба: "Shivin11/occular-uvdoc" или локальная папка с model.onnx
     unwarp_gate=True,     # True -> применять, только если стало читаемее (x unwarp_margin); False -> всегда; число -> свой порог; callable -> свой критерий
     unwarp_margin=1.05,   # порог-множитель читаемости для дефолтного гейта
     lm=True,              # beam + языковая модель; False -> жадное (быстрее, без скачивания LM)
@@ -551,7 +552,7 @@ pages = pipe.process_pdf(
 from occular import ocr
 
 ocr("document.png")                 # CPU (по умолчанию), полное качество
-ocr("document.png", gpu=True)       # GPU через PyTorch/CUDA (нужен occular-ocr[gpu])
+ocr("document.png", gpu=True)       # GPU: CUDA через ONNX Runtime (библиотеки CUDA: occular-ocr[gpu])
 ocr("document.png", lm=False)       # быстрый жадный режим, без скачивания LM
 ocr("document.png", deskew=False)   # без выпрямления наклона
 ocr("document.png", num_threads=2)  # ограничить CPU-потоки
@@ -600,7 +601,7 @@ ocr document.png --out result.json
 
 | Флаг | По умолчанию | Что делает |
 |---|---|---|
-| `--gpu` | выкл | Гонять на GPU через PyTorch/CUDA (нужен occular-ocr[gpu]). |
+| `--gpu` | выкл | Гонять на GPU (CUDA через ONNX Runtime; библиотеки CUDA: occular-ocr[gpu]). |
 | `--dpi N` | `300` | Разрешение рендеринга PDF. |
 | `--force-ocr` | выкл | OCR даже для векторных PDF. |
 | `--workers N` | авто | Параллельные воркеры (страницы PDF / файлы батча). |
@@ -641,9 +642,8 @@ for t in tr(page):
           f"ячеек {len(t['cells'])}")
 ```
 
-Детекция и сетка работают на ONNX (CPU, без доп. зависимостей). Объединённые ячейки восстанавливает
-небольшая модель на CPU, если установлен PyTorch (`pip install occular-ocr[gpu]`); без него доступна
-сетка строк/столбцов.
+Детекция, сетка строк/столбцов и объединённые ячейки — всё на ONNX (CPU или `gpu=True`), без
+доп. зависимостей.
 
 ## Опционально: нативный декодер (быстрее)
 

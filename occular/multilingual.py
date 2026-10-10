@@ -52,11 +52,9 @@ class MultilingualRouter:
     def _cyr(self):
         if self._cyr_rec is None:
             from .recognizer_onnx import CRNNRecognizerONNX
-            # Кир-модель — только CPU/ONNX (torch-бэкенда .pth для неё нет). lm=False: декодом рулит
-            # роутер (каждую кир-строку — её пер-язычной LM или greedy по конфигу).
+            # lm=False: декодом рулит роутер (каждую кир-строку — её пер-язычной LM или greedy по конфигу).
             from .recognizer_onnx import arch_files
             cyr_onnx, cyr_charset = arch_files(self._arch, "cyr")
-            # GPU для кир-модели есть только у svtr_lcnet (torch-веса залиты с 0.4.1)
             self._cyr_rec = CRNNRecognizerONNX(languages=sorted(CYR12_LANGS), num_threads=self._num_threads,
                                                gpu=self._gpu, lm=False, arch=self._arch, family="cyr",
                                                onnx_file=cyr_onnx, charset_file=cyr_charset)

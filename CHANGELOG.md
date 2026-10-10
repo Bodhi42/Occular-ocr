@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.6
+
+- **No PyTorch anywhere — every model is ONNX, on CPU and on GPU.** `gpu=True` now runs the same
+  `.onnx` files on CUDA through ONNX Runtime instead of a separate PyTorch backend with `.pth`
+  weights. TF32 is disabled on GPU so the text matches the CPU path.
+- **Table merged cells and UVDoc dewarping no longer need torch.** The table structure model
+  decides how many rows/columns to process from its own outputs, so it cannot be traced into one
+  graph (tracing silently froze the grid of the example). It is now split into two ONNX graphs
+  with the data-dependent steps in numpy between them (`table_struct_v3_main_fp32.onnx`,
+  `table_struct_v3_merge_fp32.onnx`); on 60 real tables the grid and merged cells are identical to
+  the torch model, at ~4× the speed. UVDoc is one ONNX graph (`model.onnx` in the model repo).
+  The `[unwarp]` extra is kept as an empty alias.
+- **Installation no longer touches your numpy.** `pyctcdecode` (pins `numpy<2`) is gone: its beam
+  search is vendored as `occular/_beam.py` (Apache-2.0, see `LICENSE-pyctcdecode`) with
+  bit-identical output and ~25 % faster pure-Python decoding. `opencv` is capped below 4.12, whose
+  `numpy>=2` requirement made pip upgrade numpy and break packages built for numpy 1. Together this
+  removes the source build of numpy 1.26 on Python 3.13/3.14 that failed without a compiler.
+- **`opencv-python-headless` instead of `opencv-python`** — the GUI build needs `libGL` and failed to
+  import in slim Docker images.
+- **ONNX Runtime build chosen per platform.** `onnxruntime-gpu` (also runs on CPU, same speed and
+  output) on Linux x86_64 / Windows x64 with Python 3.10+ and Linux aarch64 with 3.11+; plain
+  `onnxruntime` elsewhere. `occular-ocr[gpu]` adds CUDA and cuDNN from pip, loaded via
+  `onnxruntime.preload_dlls()` — only an NVIDIA driver is needed.
+- **Tables are returned in reading order** (top to bottom, then left to right) instead of by detector
+  confidence: confidences of tables on one page often agree to the 4th digit, so the order flipped
+  on float noise (e.g. between CPU and GPU).
+- **Clashing installs are handled without breaking neighbours.** Packages such as chromadb or
+  fastembed pull plain `onnxruntime`, ultralytics pulls `opencv-python`; pip installs them into the
+  same module as Occular's builds. Occular stays quiet while that works. If `gpu=True` finds the GPU
+  build overwritten, the fallback message gives `pip install --force-reinstall --no-deps
+  onnxruntime-gpu==<version>`, which restores CUDA and keeps every package's requirements satisfied.
+  A warning is printed on import only when onnxruntime versions differ or `cv2` fails to import.
+- **Minimum versions raised to ones that actually work** (checked by installing the lowest allowed
+  versions on Python 3.8–3.14): `onnxruntime>=1.19` (older builds lack the CPU `Trilu` kernel, so
+  reading order failed to load, and do not support numpy 2), `opencv-python-headless>=4.10.0.84`
+  (older builds do not import under numpy 2), `pymupdf>=1.23.1` (1.23.0 needs `libcrypt.so.2`).
+  A PyMuPDF import failure now shows the real cause instead of "install pymupdf".
+
 ## 0.4.1
 
 - **New default recognizer `svtr_lcnet` — about 5× faster on CPU.** A lighter architecture

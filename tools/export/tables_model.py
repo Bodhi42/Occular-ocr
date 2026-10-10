@@ -1,5 +1,5 @@
-"""Модель структуры таблиц (FastTab, split[+merge]) — определение сети для CPU-torch пути.
-Скопировано как самодостаточный модуль (зависит только от torch). Используется occular/tables.py."""
+"""Определение сети структуры таблиц (FastTab, split+merge) на torch — только для экспорта в ONNX
+(tools/export/export_tables_onnx.py). В пакет occular не входит: там модель исполняется через onnxruntime."""
 import torch, torch.nn as nn, torch.nn.functional as F
 
 

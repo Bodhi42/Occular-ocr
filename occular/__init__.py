@@ -16,11 +16,14 @@ Occular OCR Package
     ocr document.pdf --workers 4
 """
 
-__version__ = "0.4.3"
+__version__ = "0.4.6"
 
 import os
 from typing import Union, List, Dict, Optional
 from pathlib import Path
+
+from . import _envcheck
+_envcheck.check()          # конфликтующие сборки onnxruntime / opencv в одном модуле — предупредить сразу
 
 from .registry import Registry
 from .pipeline import OCRPipeline as _OCRPipelineBase, get_optimal_workers
@@ -32,7 +35,7 @@ from .settings import Settings
 # Регистрация компонентов
 # ============================================================================
 
-# Библиотека CPU-only ONNX.
+# Все модели — ONNX (CPU или CUDA через onnxruntime).
 from .dbnet_detector_onnx import DBNetDetectorONNX
 from .recognizer_onnx import CRNNRecognizerONNX
 from .multilingual import MultilingualRecognizer, ALL_LANGS, CYR12_LANGS
@@ -44,7 +47,7 @@ Registry.register_recognizer("multilingual", MultilingualRecognizer)
 
 def TableRecognizer(*args, **kwargs):
     """Распознавание таблиц (детекция + структура + объединённые ячейки). Ленивая обёртка —
-    torch подгружается только при вызове. См. occular.tables.TableRecognizer."""
+    модели грузятся только при вызове. См. occular.tables.TableRecognizer."""
     from .tables import TableRecognizer as _TR
     return _TR(*args, **kwargs)
 

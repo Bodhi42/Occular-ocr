@@ -13,7 +13,7 @@ CLI для OCR
 
     # С опциями
     ocr document.pdf --out result.json   # один файл → JSON с координатами
-    ocr photo.png --gpu                  # на GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu])
+    ocr photo.png --gpu                  # на GPU/CUDA (CUDA-библиотеки: pip install "occular-ocr[gpu]")
 
     # Через python -m
     python -m occular photo.png
@@ -40,7 +40,7 @@ def main():
   ocr document.pdf                   # Распознать PDF
   ocr ./scans ./out                  # Папка → ./out/<имя>.txt на каждый файл
   ocr ./scans --workers 8            # Батч папки в 8 воркеров (.txt рядом с файлами)
-  ocr photo.png --gpu                # На GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu])
+  ocr photo.png --gpu                # На GPU/CUDA (CUDA-библиотеки: pip install "occular-ocr[gpu]")
   ocr photo.png --out result.json    # Один файл → JSON с координатами
         """
     )
@@ -60,7 +60,7 @@ def main():
     # Для обратной совместимости
     parser.add_argument("--image", type=str, help=argparse.SUPPRESS)
     parser.add_argument("--pdf", type=str, help=argparse.SUPPRESS)
-    parser.add_argument("--gpu", action="store_true", help="Исполнять на GPU/CUDA (нужен PyTorch: pip install occular-ocr[gpu])")
+    parser.add_argument("--gpu", action="store_true", help="Исполнять на GPU/CUDA (CUDA-библиотеки: pip install 'occular-ocr[gpu]')")
     parser.add_argument(
         "--languages", "--lang",
         type=str,

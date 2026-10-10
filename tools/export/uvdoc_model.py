@@ -1,4 +1,5 @@
-"""Вендор-реализация сети UVDoc на чистом torch (без transformers/torchvision).
+"""Только для экспорта в ONNX (tools/export/export_uvdoc_onnx.py), в пакет occular не входит.
+Вендор-реализация сети UVDoc на чистом torch (без transformers/torchvision).
 
 Портировано из архитектуры UVDoc (Apache-2.0). Имена модулей зеркалируют оригинал 1:1,
 поэтому state_dict из официального чекпойнта (.safetensors) грузится strict без переименований.

@@ -6,12 +6,9 @@
 """
 
 import sys
-import warnings
 import numpy as np
-import onnxruntime as ort
 import cv2
 from typing import List
-from pathlib import Path
 import pyclipper
 
 
@@ -30,45 +27,22 @@ class DBNetDetectorONNX:
     """Text detector using ONNX Runtime (ResNet50 backbone, RGB+ImageNet)."""
 
     def __init__(self, num_threads: int = 4, gpu: bool = False):
-        self.session = None
-        self._torch = None            # torch-модель на CUDA, если gpu=True и бэкенд доступен
-        self._device = None
         try:
             cv2.setNumThreads(max(1, int(num_threads)))     # OpenCV по умолч. берёт все ядра
         except Exception:
             pass
-
-        # GPU-путь: нативный torch на CUDA (веса .pth). Надёжнее onnxruntime-gpu.
-        if gpu:
-            from ._torch_backend import cuda_available, torch_missing_reason, load_detector
-            if cuda_available():
-                self._torch = load_detector("cuda"); self._device = "cuda"
-                print("Loaded DBNet detector (GPU/CUDA, PyTorch)", file=sys.stderr)
-                return
-            warnings.warn(f"gpu=True, но GPU-бэкенд недоступен: {torch_missing_reason()}. "
-                          f"Откат на CPU (ONNX).")
-
-        # CPU-путь (по умолчанию и как фолбэк): ONNX Runtime, только CPU.
         from .model_files import ensure_weight
-        onnx_path = Path(ensure_weight("detector_dbnet_fp32.onnx"))
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = max(1, int(num_threads))
-        sess_options.inter_op_num_threads = 1
-        self.session = ort.InferenceSession(str(onnx_path), sess_options=sess_options,
-                                            providers=["CPUExecutionProvider"])
+        from ._runtime import make_session, session_on_gpu
+        self.session = make_session(ensure_weight("detector_dbnet_fp32.onnx"), num_threads, gpu)
         self.input_name = self.session.get_inputs()[0].name  # 'x'
-        print(f"Loaded DBNet detector (CPU, threads={sess_options.intra_op_num_threads})", file=sys.stderr)
+        print(f"Loaded DBNet detector ({'GPU/CUDA' if session_on_gpu(self.session) else 'CPU'}, "
+              f"threads={max(1, int(num_threads))})", file=sys.stderr)
 
     def detect(self, image: np.ndarray) -> List[np.ndarray]:
         """Detect text regions. image — RGB (как отдаёт пайплайн; наш детектор училс на RGB)."""
         orig_h, orig_w = image.shape[:2]
         input_tensor, scale = self._preprocess(image)
-        if self._torch is not None:
-            from ._torch_backend import infer
-            prob_map = infer(self._torch, input_tensor, self._device)[0][0].cpu().numpy()  # prob (H,W)
-        else:
-            prob_map = self.session.run(None, {self.input_name: input_tensor})[0][0]        # 'prob' → (H,W)
+        prob_map = self.session.run(None, {self.input_name: input_tensor})[0][0]        # 'prob' → (H,W)
         return self._postprocess(prob_map, scale, orig_w, orig_h)
 
     def _preprocess(self, image: np.ndarray):
@@ -132,11 +106,7 @@ class DBNetDetectorONNX:
         polygon, ось), НЕ теряя угол. Пороги/веса/анклип идентичны detect(). Опционален (флаг пайплайна)."""
         orig_h, orig_w = image.shape[:2]
         input_tensor, scale = self._preprocess(image)
-        if self._torch is not None:
-            from ._torch_backend import infer
-            prob_map = infer(self._torch, input_tensor, self._device)[0][0].cpu().numpy()
-        else:
-            prob_map = self.session.run(None, {self.input_name: input_tensor})[0][0]
+        prob_map = self.session.run(None, {self.input_name: input_tensor})[0][0]
         return self._postprocess_regions(prob_map, scale, orig_w, orig_h)
 
     def _postprocess_regions(self, prob_map, scale, orig_w, orig_h):

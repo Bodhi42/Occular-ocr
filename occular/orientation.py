@@ -31,20 +31,16 @@ _IDX = (np.arange(4).reshape(4, 1) + np.arange(4).reshape(1, 4)) % 4
 class OrientationDetector:
     """OriNet (ONNX): класс поворота + уверенность. Модель ~4.8 МБ, ~28 мс на 8 потоках."""
 
-    def __init__(self, num_threads: int = 4, min_confidence: float = MIN_CONFIDENCE):
-        import onnxruntime as ort
+    def __init__(self, num_threads: int = 4, min_confidence: float = MIN_CONFIDENCE, gpu: bool = False):
         from .model_files import ensure_weight
+        from ._runtime import make_session, session_on_gpu
 
         self.min_confidence = float(min_confidence)
-        so = ort.SessionOptions()
-        so.intra_op_num_threads = max(1, int(num_threads))
-        so.inter_op_num_threads = 1
-        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self.session = ort.InferenceSession(ensure_weight("orientation_orinet_fp32.onnx"),
-                                            sess_options=so, providers=["CPUExecutionProvider"])
+        self.session = make_session(ensure_weight("orientation_orinet_fp32.onnx"), num_threads, gpu)
         self.input_name = self.session.get_inputs()[0].name
         self._lock = threading.Lock()
-        print(f"Loaded orientation model (CPU, threads={so.intra_op_num_threads})", file=sys.stderr)
+        print(f"Loaded orientation model ({'GPU/CUDA' if session_on_gpu(self.session) else 'CPU'}, "
+              f"threads={max(1, int(num_threads))})", file=sys.stderr)
 
     # --- препроцессинг: letterbox в квадрат, белая заливка, норма ImageNet ---
     @staticmethod
