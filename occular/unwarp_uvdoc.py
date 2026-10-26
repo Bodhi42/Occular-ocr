@@ -28,8 +28,8 @@ class UVDocUnwarper:
     def __init__(self, model_id: str = None, gpu: bool = False, num_threads: int = 4, device: str = None):
         if not model_id:
             raise ValueError(
-                "UVDocUnwarper: укажи model_id = HF-репозиторий или локальная папка с model.onnx UVDoc "
-                "(или путь к самому .onnx). Вшитого дефолта в occular нет — веса опциональны."
+                "UVDocUnwarper: pass model_id = a Hugging Face repo or a local folder with the UVDoc model.onnx "
+                "(or the path to the .onnx itself). occular has no built-in default: the weights are optional."
             )
         if device is not None:                          # совместимость со старым API (device="cuda"/"cpu")
             gpu = str(device).startswith("cuda")
@@ -44,7 +44,7 @@ class UVDocUnwarper:
         if os.path.isdir(model_id):
             p = os.path.join(model_id, ONNX_NAME)
             if not os.path.exists(p):
-                raise FileNotFoundError(f"В папке {model_id} нет {ONNX_NAME}.")
+                raise FileNotFoundError(f"No {ONNX_NAME} in the folder {model_id}.")
             return p
         from huggingface_hub import hf_hub_download
         return hf_hub_download(model_id, ONNX_NAME)

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "occular-decode"
-version = "0.1.0"
+version = "0.2.0"
 description = "Нативный CTC beam-search декодер с n-gram LM для Occular-OCR"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }

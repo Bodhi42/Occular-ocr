@@ -16,7 +16,7 @@ Occular OCR Package
     ocr document.pdf --workers 4
 """
 
-__version__ = "0.4.6"
+__version__ = "0.5.0"
 
 import os
 from typing import Union, List, Dict, Optional
@@ -27,7 +27,9 @@ _envcheck.check()          # конфликтующие сборки onnxruntime
 
 from .registry import Registry
 from .pipeline import OCRPipeline as _OCRPipelineBase, get_optimal_workers
-from .model_files import model_info, download_reading_order, reading_order_ready, WEIGHTS_DIR
+from .model_files import (model_info, download_reading_order, reading_order_ready, WEIGHTS_DIR,
+                          download_layout, layout_ready)
+from .layout import LayoutDetector, LayoutRegion, LayoutResult, LAYOUT_LABELS
 from .settings import Settings
 
 
@@ -76,7 +78,7 @@ def _normalize_languages(languages, arch=None):
 
 
 def _build_pipeline(deskew, lm, num_threads, gpu, reading_order=False, languages=None,
-                    orientation=False, arch=None):
+                    orientation=False, arch=None, tables=False):
     """Собрать конвейер. languages=None → русский распознаватель (ru/en) по умолчанию;
     список языков или 'auto' → мультиязычный роутер (русская + 12 кир-языков)."""
     _ensure_registered()
@@ -84,12 +86,13 @@ def _build_pipeline(deskew, lm, num_threads, gpu, reading_order=False, languages
     return _OCRPipelineBase(detector_name="dbnet-onnx", recognizer_name=rec_name,
                             recognizer_kwargs=rec_kwargs,
                             deskew=deskew, reading_order=reading_order, lm=lm,
-                            num_threads=num_threads, gpu=gpu, orientation=orientation)
+                            num_threads=num_threads, gpu=gpu, orientation=orientation, tables=tables)
 
 
 def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         num_threads: Optional[int] = None, gpu: bool = False,
-        languages=None, orientation: bool = False, recognizer: Optional[str] = None) -> Union[str, List[str]]:
+        languages=None, orientation: bool = False, recognizer: Optional[str] = None,
+        tables: bool = False) -> Union[str, List[str]]:
     """
     Распознать текст из изображения или PDF.
 
@@ -97,10 +100,11 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         file_path: путь к файлу (изображение или PDF)
         deskew: выпрямлять наклон скана (по умолчанию True)
         lm: beam-CTC + языковая модель для декодирования (по умолчанию True; False = быстрый greedy)
-        num_threads: число CPU-ядер (None = min(доступные, 4))
+        num_threads: потоков на страницу (None = min(доступные, 8))
         gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
         orientation: определять поворот страницы (0/90/180/270°) и выпрямлять (по умолчанию False)
         recognizer: архитектура распознавателя — 'svtr_lcnet' (по умолчанию) или 'svtr_t' (крупная)
+        tables: находить таблицы; в тексте они выводятся Markdown-таблицами на своём месте (по умолчанию False)
         languages: язык(и) текста. None (по умолчанию) — русская модель (ru/en). Список кодов —
             мультиязычный роутер: один кир-язык (напр. ['uk']) читается им, несколько (напр.
             ['ru','kk','uk']) — построчным определением языка. 'auto' — авто среди всех 14.
@@ -117,30 +121,25 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         >>> print(text)
         Привет мир
     """
+    from .tables import compose_text
     pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages,
-                               orientation=orientation, arch=recognizer)
+                               orientation=orientation, arch=recognizer, tables=tables)
 
     path = Path(file_path)
     if path.suffix.lower() == '.pdf':
         results = pipeline.process_pdf(file_path)
-        # Возвращаем текст по страницам
-        pages_text = []
-        for page in results:
-            # Сортируем по Y (сверху вниз)
-            sorted_results = sorted(page["results"], key=lambda r: r["quad"][0][1])
-            page_text = "\n".join(item["text"] for item in sorted_results)
-            pages_text.append(page_text)
-        return pages_text
+        # Текст по страницам, строки сверху вниз (таблицы — Markdown на месте первой строки)
+        return [compose_text(sorted(page["results"], key=lambda r: r["quad"][0][1]), page.get("tables"))
+                for page in results]
     else:
         results = pipeline.process_image(file_path)
-        # Сортируем по Y (сверху вниз)
-        sorted_results = sorted(results, key=lambda r: r["quad"][0][1])
-        return "\n".join(item["text"] for item in sorted_results)
+        return compose_text(sorted(results, key=lambda r: r["quad"][0][1]), getattr(results, "tables", None))
 
 
 def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
                  num_threads: Optional[int] = None, gpu: bool = False,
-                 languages=None, orientation: bool = False, recognizer: Optional[str] = None) -> List[Dict]:
+                 languages=None, orientation: bool = False, recognizer: Optional[str] = None,
+                 tables: bool = False) -> List[Dict]:
     """
     Распознать текст с полной информацией (координаты, confidence).
 
@@ -148,12 +147,14 @@ def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
         file_path: путь к файлу
         deskew: выпрямлять наклон скана (по умолчанию True)
         lm: beam-CTC + языковая модель для декодирования (по умолчанию True; False = быстрый greedy)
-        num_threads: число CPU-ядер (None = min(доступные, 4))
+        num_threads: потоков на страницу (None = min(доступные, 8))
         gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
         orientation: определять поворот страницы (0/90/180/270°) и выпрямлять (по умолчанию False)
         recognizer: архитектура распознавателя — 'svtr_lcnet' (по умолчанию) или 'svtr_t' (крупная)
         languages: язык(и) текста (см. ocr()). None — русская модель (ru/en); список кодов или
             'auto' — мультиязычный роутер (русская + 12 кир-языков).
+        tables: находить таблицы (по умолчанию False): строкам в таблице добавляются ключи 'table' и
+            'cell', структура таблиц — в атрибуте .tables результата (для PDF — ключ 'tables' страницы)
 
     Returns:
         Список словарей {"quad": [...], "text": str, "confidence": float}
@@ -165,7 +166,7 @@ def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
         ...     print(f"{r['text']} ({r['confidence']:.2f})")
     """
     pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages,
-                               orientation=orientation, arch=recognizer)
+                               orientation=orientation, arch=recognizer, tables=tables)
 
     path = Path(file_path)
     if path.suffix.lower() == '.pdf':
@@ -205,7 +206,10 @@ class OCRPipeline:
         orientation: bool = False,
         unwarp=None,
         unwarp_gate=True,
-        unwarp_margin: float = 1.05
+        unwarp_margin: float = 1.05,
+        experimental_layout_order: bool = False,
+        layout_order_method: str = "model",
+        tables: bool = False
     ):
         _ensure_registered()
 
@@ -214,7 +218,9 @@ class OCRPipeline:
             settings = Settings(deskew=deskew, reading_order=reading_order, lm=lm,
                                 num_threads=num_threads, gpu=gpu, orientation=orientation,
                                 detector=detector, recognizer=recognizer, languages=languages,
-                                unwarp=unwarp, unwarp_gate=unwarp_gate, unwarp_margin=unwarp_margin)
+                                unwarp=unwarp, unwarp_gate=unwarp_gate, unwarp_margin=unwarp_margin,
+                                experimental_layout_order=experimental_layout_order,
+                                layout_order_method=layout_order_method, tables=tables)
         self.settings = settings
         s = settings
 
@@ -222,9 +228,9 @@ class OCRPipeline:
         self.reading_order = s.reading_order
         if s.reading_order and not reading_order_ready():
             raise RuntimeError(
-                "reading_order=True, но модель порядка чтения не скачана.\n"
-                "Скачайте её:  from occular import download_reading_order; download_reading_order()\n"
-                "Или посмотрите статус:  from occular import model_info; model_info()"
+                "reading_order=True, but the reading-order model is not downloaded.\n"
+                "Download it:  from occular import download_reading_order; download_reading_order()\n"
+                "Or check the status:  from occular import model_info; model_info()"
             )
 
         detector = s.detector or "dbnet-onnx"
@@ -248,7 +254,10 @@ class OCRPipeline:
             gpu=s.gpu,
             unwarp=s.unwarp,
             unwarp_gate=s.unwarp_gate,
-            unwarp_margin=s.unwarp_margin
+            unwarp_margin=s.unwarp_margin,
+            experimental_layout_order=s.experimental_layout_order,
+            layout_order_method=s.layout_order_method,
+            tables=s.tables
         )
 
     def process_image(self, image_path: str) -> List[Dict]:
@@ -256,7 +265,8 @@ class OCRPipeline:
         Обработать изображение.
 
         Returns:
-            Список {"quad": [...], "text": str, "confidence": float}
+            Список {"quad": [...], "text": str, "confidence": float}; при Settings(tables=True) у строк в
+            таблицах есть ключи 'table' и 'cell', а у списка — атрибут .tables (структура таблиц)
         """
         return self._pipeline.process_image(image_path)
 
@@ -275,7 +285,9 @@ class OCRPipeline:
             pdf_path: путь к PDF
             dpi: разрешение рендеринга (default: 300)
             force_ocr: принудительно OCR даже для векторных PDF
-            workers: количество воркеров (None = auto, max 4)
+            workers: сколько страниц параллельно, отдельными процессами (None = авто по ядрам и памяти,
+                до 16; 1 = последовательно). Нужен `if __name__ == "__main__":` в главном скрипте —
+                иначе потоки (до 8)
 
         Returns:
             Список страниц с результатами
@@ -295,16 +307,14 @@ class OCRPipeline:
             Для изображения: строка
             Для PDF: список строк по страницам
         """
+        from .tables import compose_text
         path = Path(file_path)
         if path.suffix.lower() == '.pdf':
             results = self.process_pdf(file_path, **kwargs)
-            return [
-                "\n".join(item["text"] for item in page["results"])
-                for page in results
-            ]
+            return [compose_text(page["results"], page.get("tables")) for page in results]
         else:
             results = self.process_image(file_path)
-            return "\n".join(item["text"] for item in results)
+            return compose_text(results, getattr(results, "tables", None))
 
 
 # ============================================================================
@@ -324,6 +334,13 @@ __all__ = [
     "model_info",
     "download_reading_order",
     "reading_order_ready",
+    # Layout-регионы (D-FINE-S): координаты, score, метка, размер страницы
+    "LayoutDetector",
+    "LayoutRegion",
+    "LayoutResult",
+    "LAYOUT_LABELS",
+    "download_layout",
+    "layout_ready",
     "WEIGHTS_DIR",
     # Утилиты
     "get_optimal_workers",

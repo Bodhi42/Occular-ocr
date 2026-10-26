@@ -38,16 +38,16 @@ def _resolve_lm_files() -> tuple:
         npz = Path(d) / NPZ
         uni = Path(d) / UNIGRAMS
         if not npz.exists():
-            raise FileNotFoundError(f"OCCULAR_LM_DIR задан, но нет {npz}")
+            raise FileNotFoundError(f"OCCULAR_LM_DIR is set, but {npz} does not exist")
         if not uni.exists():
-            raise FileNotFoundError(f"OCCULAR_LM_DIR задан, но нет {uni}")
+            raise FileNotFoundError(f"OCCULAR_LM_DIR is set, but {uni} does not exist")
         return str(npz), str(uni)
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
         raise RuntimeError(
-            "Для beam+LM нужен huggingface_hub (pip install huggingface_hub) "
-            "или задайте OCCULAR_LM_DIR с локальными compact_lm.npz и unigrams.txt."
+            "beam+LM needs huggingface_hub (pip install huggingface_hub), "
+            "or set OCCULAR_LM_DIR to a folder with compact_lm.npz and unigrams.txt."
         )
     npz = hf_hub_download(LM_HF_REPO, NPZ)
     uni = hf_hub_download(LM_HF_REPO, UNIGRAMS)
@@ -76,7 +76,7 @@ def _build_native(labels, npz_path, uni_path, alpha, beta, beam_width):
         )
     except Exception as e:
         # npz со сжатием, необычный формат, ФС без mmap — грузим как раньше, через numpy.
-        warnings.warn(f"occular: mmap-загрузка LM не удалась ({e}); читаю через numpy")
+        warnings.warn(f"occular: memory-mapping the LM failed ({e}); loading it with numpy")
 
     d = np.load(npz_path)
     orders = (1, 2, 3, 4)
@@ -113,16 +113,16 @@ class LMDecoder:
         self.native = _build_native(labels, npz_path, uni_path, alpha, beta, self.beam_width)
         if self.native is not None:
             self.decoder = None
-            print(f"[occular] LM (нативный декодер): {Path(npz_path).name} ({size_mb:.0f} МБ), "
-                  f"униграмм={self.native.vocab_size()}, alpha={alpha} beta={beta} "
+            print(f"[occular] LM (native decoder): {Path(npz_path).name} ({size_mb:.0f} MB), "
+                  f"unigrams={self.native.vocab_size()}, alpha={alpha} beta={beta} "
                   f"beam={self.beam_width}", file=sys.stderr)
             return
 
         from . import _pylm
         unigrams = [l.rstrip("\n") for l in open(uni_path, encoding="utf-8") if l.strip()]
         self.decoder = _pylm.build_decoder(labels, npz_path, unigrams, alpha=alpha, beta=beta)
-        print(f"[occular] LM (чисто-Python): {Path(npz_path).name} "
-              f"({size_mb:.0f} МБ), униграмм={len(unigrams)}, "
+        print(f"[occular] LM (pure Python): {Path(npz_path).name} "
+              f"({size_mb:.0f} MB), unigrams={len(unigrams)}, "
               f"alpha={alpha} beta={beta} beam={self.beam_width}", file=sys.stderr)
 
     @staticmethod
@@ -142,6 +142,12 @@ class LMDecoder:
         if not (self.lock_codes and text):
             return text
         return _lock_codes(text, _greedy_ctc(logits_tc, self.chars))
+
+    def _lock_with(self, text: str, greedy: str) -> str:
+        """То же, что _apply_lock, с готовым greedy-чтением (от нативного декодера)."""
+        if not (self.lock_codes and text):
+            return text
+        return _lock_codes(text, greedy)
 
     def decode(self, logits_1tc: np.ndarray) -> tuple:
         """logits [1,T,C] -> (text, confidence)."""
@@ -167,5 +173,10 @@ class LMDecoder:
         if self.native is None:
             return [self.decode(lg) for lg in logits_list]
         batch = [np.ascontiguousarray(lg[0], np.float32) for lg in logits_list]
+        if hasattr(self.native, "decode_batch_greedy"):
+            # акустическое greedy для замка кодов считает нативный декодер в той же параллельной задаче:
+            # numpy-argmax по строке под GIL был самой дорогой последовательной частью (≈13 мс на 1228 строк)
+            return [(self._lock_with(t, g), self._confidence(t, s))
+                    for t, s, g in self.native.decode_batch_greedy(batch)]
         return [(self._apply_lock(t, lg[0]), self._confidence(t, s))
                 for (t, s), lg in zip(self.native.decode_batch(batch), logits_list)]

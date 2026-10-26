@@ -38,8 +38,8 @@ def ensure_weight(rel_path: str) -> str:
         from huggingface_hub import hf_hub_download
     except ImportError:
         raise RuntimeError(
-            f"Веса '{rel_path}' нет локально, а huggingface_hub не установлен. "
-            f"pip install huggingface_hub  (или положите файл в {local})"
+            f"Weights '{rel_path}' are not available locally and huggingface_hub is not installed. "
+            f"pip install huggingface_hub  (or put the file at {local})"
         )
     return hf_hub_download(WEIGHTS_HF_REPO, rel_path, revision=WEIGHTS_REVISION)
 
@@ -52,14 +52,14 @@ def ensure_cyr_lm(lang: str) -> tuple:
         npz = Path(d) / lang / NPZ_NAME
         uni = Path(d) / lang / UNI_NAME
         if not npz.exists() or not uni.exists():
-            raise FileNotFoundError(f"OCCULAR_CYR_LM_DIR задан, но нет {npz} или {uni}")
+            raise FileNotFoundError(f"OCCULAR_CYR_LM_DIR is set, but {npz} or {uni} does not exist")
         return str(npz), str(uni)
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
         raise RuntimeError(
-            f"Для кир-LM '{lang}' нужен huggingface_hub (pip install huggingface_hub) "
-            f"или задайте OCCULAR_CYR_LM_DIR с папками языков.")
+            f"The Cyrillic LM for '{lang}' needs huggingface_hub (pip install huggingface_hub), "
+            f"or set OCCULAR_CYR_LM_DIR to a folder with per-language subfolders.")
     npz = hf_hub_download(CYR_LM_HF_REPO, f"{lang}/{NPZ_NAME}", revision=WEIGHTS_REVISION)
     uni = hf_hub_download(CYR_LM_HF_REPO, f"{lang}/{UNI_NAME}", revision=WEIGHTS_REVISION)
     return npz, uni
@@ -92,69 +92,75 @@ UNI_NAME = "unigrams.txt"
 
 # Реестр: человекочитаемое имя -> файлы + описание + обязательна ли
 MODELS = {
-    "Детектор текста (находит строки на странице)": {
+    "Text detector (finds lines on the page)": {
         "files": ["detector_dbnet_fp32.onnx"],
-        "desc": "Детектор текста, ONNX FP32 — локально в weights/ или с HuggingFace",
+        "desc": "Text detector, ONNX FP32 — local in weights/ or from Hugging Face",
         "required": True,
     },
-    "Распознаватель svtr_lcnet (по умолчанию)": {
+    "Recognizer svtr_lcnet (default)": {
         "files": ["recognizer_svtr_lcnet_fp32.onnx", "recognizer_charset.txt"],
-        "desc": "Лёгкий распознаватель ru/en (LCNet-стем), ONNX FP32 — модель по умолчанию, "
-                "~4x быстрее svtr_t при качестве 99.6%; локально в weights/ или с HuggingFace",
+        "desc": "Light ru/en recognizer (LCNet stem), ONNX FP32 — the default model, "
+                "~4x faster than svtr_t at 99.6% of its quality; local in weights/ or from Hugging Face",
         "required": True,
     },
-    "Распознаватель svtr_t (крупный, опционально)": {
+    "Recognizer svtr_t (larger, optional)": {
         "files": ["recognizer_svtr_fp32.onnx", "recognizer_charset.txt"],
-        "desc": "Крупный распознаватель ru/en — для ocr(recognizer='svtr_t'); "
-                "локально в weights/ или с HuggingFace",
+        "desc": "Larger ru/en recognizer — for ocr(recognizer='svtr_t'); "
+                "local in weights/ or from Hugging Face",
         "required": False,
     },
-    "Кир-распознаватель 12 языков, svtr_lcnet (опц.)": {
+    "Cyrillic recognizer, 12 languages, svtr_lcnet (opt.)": {
         "files": ["recognizer_svtr_lcnet_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt"],
-        "desc": "Лёгкий распознаватель 12 кир-языков (ba be bg cv kk ky mk mn sr tg tt uk), ONNX FP32 — "
-                "по умолчанию для ocr(languages=[...]); локально в weights/ или с HuggingFace",
+        "desc": "Light recognizer for 12 Cyrillic-script languages (ba be bg cv kk ky mk mn sr tg tt uk), ONNX FP32 — "
+                "default for ocr(languages=[...]); local in weights/ or from Hugging Face",
         "required": False,
     },
-    "Кир-распознаватель 12 языков, svtr_t (опц.)": {
+    "Cyrillic recognizer, 12 languages, svtr_t (opt.)": {
         "files": ["recognizer_svtr_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt"],
-        "desc": "Распознаватель 12 кир-языков (ba be bg cv kk ky mk mn sr tg tt uk), ONNX FP32 — "
-                "для ocr(languages=[...]); локально в weights/ или с HuggingFace",
+        "desc": "Recognizer for 12 Cyrillic-script languages (ba be bg cv kk ky mk mn sr tg tt uk), ONNX FP32 — "
+                "for ocr(languages=[...]); local in weights/ or from Hugging Face",
         "required": False,
     },
-    "Ориентация страницы (опционально)": {
+    "Layout regions D-FINE-S (optional)": {
+        "files": ["layout_dfine_s144k_fp32.onnx", "layout_order_blocks_fp32.onnx"],
+        "desc": "Page regions (box, score, one of 18 labels) — for LayoutDetector — and the block-order model "
+                "(3.3M) for the experimental reading order; local in weights/ or from Hugging Face",
+        "required": False,
+    },
+    "Page orientation (optional)": {
         "files": ["orientation_orinet_fp32.onnx"],
-        "desc": "Определяет поворот страницы 0/90/180/270° — для ocr(orientation=True); "
-                "локально в weights/ или с HuggingFace",
+        "desc": "Detects a 0/90/180/270° page rotation — for ocr(orientation=True); "
+                "local in weights/ or from Hugging Face",
         "required": False,
     },
-    "Определитель языка (опц., для авто-роутинга)": {
+    "Language identifier (opt., for auto routing)": {
         "files": ["langid_models.pkl"],
-        "desc": "char-n-gram определитель (12 кир + ru) для авто-режима languages=None; "
-                "локально в weights/ или с HuggingFace",
+        "desc": "char-n-gram language identifier (12 Cyrillic + ru) for languages='auto'; "
+                "local in weights/ or from Hugging Face",
         "required": False,
     },
-    "Детектор таблиц (опционально)": {
-        "files": ["table_detect_v3_fp32.onnx"],
-        "desc": "Находит таблицы на странице (карта таблица/фон → рамки), ONNX FP32 — для TableRecognizer; "
-                "локально в weights/ или с HuggingFace",
+    "Table detector (optional)": {
+        "files": ["table_detect_dfine_v4_fp32.onnx"],
+        "desc": "Finds tables on a page (D-FINE-S, a box and score per table), ONNX FP32 — for tables=True "
+                "and TableRecognizer; local in weights/ or from Hugging Face",
         "required": False,
     },
-    "Структура таблиц (опционально)": {
-        "files": ["table_struct_v3_main_fp32.onnx", "table_struct_v3_merge_fp32.onnx"],
-        "desc": "Сетка строк/столбцов + объединённые ячейки (colspan/rowspan), два ONNX-графа FP32 "
-                "(экспорт table_struct_split_merge_v2) — для TableRecognizer; локально в weights/ или с HuggingFace",
+    "Table structure (optional)": {
+        "files": ["table_struct_v4_main_fp32.onnx", "table_struct_v4_merge_fp32.onnx"],
+        "desc": "Row/column grid + merged cells (colspan/rowspan), two ONNX FP32 graphs (tall tables are "
+                "read in strips) — for tables=True and TableRecognizer; local in weights/ or from Hugging Face",
         "required": False,
     },
-    "Порядок чтения / layout (опционально)": {
+    "Reading order / layout (optional)": {
         "files": ["reading_order/encoder.onnx", "reading_order/decoder.onnx"],
-        "desc": f"AR-layout, ONNX FP32 — качается с HuggingFace ({READING_ORDER_HF_REPO}), по умолчанию ВЫКЛ",
+        "desc": f"AR layout, ONNX FP32 — downloaded from Hugging Face ({READING_ORDER_HF_REPO}), off by default",
         "required": False,
     },
-    "Языковая модель beam-CTC (по умолчанию ВКЛ)": {
+    "Beam-CTC language model (on by default)": {
         "files": [],   # в кэше HF, не в weights/; см. decoder_lm._resolve_lm_files
-        "desc": f"n-gram LM (compact_lm.npz ~270МБ + unigrams.txt) — чистый Python, без C-зависимостей; "
-                f"качается с HuggingFace ({LM_HF_REPO}) при 1-м запуске или из OCCULAR_LM_DIR. "
-                f"Отключить: OCRPipeline(lm=False)",
+        "desc": f"n-gram LM (compact_lm.npz ~270 MB + unigrams.txt) — pure Python, no C dependencies "
+                f"(optional native decoder: occular-decode); downloaded from Hugging Face ({LM_HF_REPO}) "
+                f"on first run, or from OCCULAR_LM_DIR. Turn off: OCRPipeline(lm=False)",
         "required": False,
     },
 }
@@ -162,26 +168,38 @@ MODELS = {
 
 def model_info():
     """Показать все модели: где лежат, размер, статус. Для чайников."""
-    print(f"\nМодели Occular-OCR лежат в:\n  {WEIGHTS_DIR}\n")
-    print(f"{'МОДЕЛЬ':48} {'РАЗМЕР':>8}  СТАТУС")
+    print(f"\nOccular-OCR models are stored in:\n  {WEIGHTS_DIR}\n")
+    print(f"{'MODEL':48} {'SIZE':>8}  STATUS")
     print("-" * 78)
     for name, m in MODELS.items():
         present = all((WEIGHTS_DIR / f).exists() for f in m["files"])
         total = sum((WEIGHTS_DIR / f).stat().st_size for f in m["files"] if (WEIGHTS_DIR / f).exists())
-        size = f"{total/1e6:.0f} МБ" if total else "—"
+        size = f"{total/1e6:.0f} MB" if total else "—"
         if present:
-            status = "✅ на месте"
+            status = "✅ present"
         elif m["required"]:
-            status = "❌ НЕТ (обязательна!)"
+            status = "❌ MISSING (required!)"
         else:
             # опциональные модели качаются сами при первом использовании своей функции
-            status = "⬇ не скачана (опц., скачается при первом использовании)"
+            status = "⬇ not downloaded (optional, downloaded on first use)"
         print(f"{name[:48]:48} {size:>8}  {status}")
         for f in m["files"]:
             print(f"    └─ {f}")
     print("-" * 78)
-    print("Порядок чтения выключен по умолчанию. Включить: OCRPipeline(reading_order=True)")
-    print("Скачать порядок чтения:  from occular import download_reading_order; download_reading_order()\n")
+    print("Reading order is off by default. Turn it on: OCRPipeline(reading_order=True)")
+    print("Download the reading-order model:  from occular import download_reading_order; download_reading_order()\n")
+
+
+def layout_ready() -> bool:
+    """Лежат ли layout-модель (D-FINE-S) и модель порядка блоков локально в weights/? (Иначе скачаются при первом использовании.)"""
+    return all((WEIGHTS_DIR / f).exists() for f in ("layout_dfine_s144k_fp32.onnx", "layout_order_blocks_fp32.onnx"))
+
+
+def download_layout() -> str:
+    """Скачать layout-модель D-FINE-S и модель порядка блоков с HuggingFace в кэш (или вернуть локальный
+    путь). Возвращает путь к layout-модели."""
+    ensure_weight("layout_order_blocks_fp32.onnx")
+    return ensure_weight("layout_dfine_s144k_fp32.onnx")
 
 
 def reading_order_ready() -> bool:
@@ -192,19 +210,19 @@ def reading_order_ready() -> bool:
 def download_reading_order():
     """Скачать опциональную модель порядка чтения (layout) с HuggingFace в occular/weights/reading_order/."""
     if reading_order_ready():
-        print(f"✅ Уже скачана: {READING_ORDER_DIR}")
+        print(f"✅ Already downloaded: {READING_ORDER_DIR}")
         return str(READING_ORDER_DIR)
     READING_ORDER_DIR.mkdir(parents=True, exist_ok=True)
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
-        raise RuntimeError("Нужен huggingface_hub: pip install huggingface_hub")
+        raise RuntimeError("huggingface_hub is required: pip install huggingface_hub")
     import shutil
-    print(f"Скачиваю порядок чтения с HuggingFace ({READING_ORDER_HF_REPO}) в {READING_ORDER_DIR} ...")
+    print(f"Downloading the reading-order model from Hugging Face ({READING_ORDER_HF_REPO}) to {READING_ORDER_DIR} ...")
     # в репо файлы плоские (reading_order_*.onnx) — раскладываем в weights/reading_order/{encoder,decoder}.onnx
     for repo_name, local_name in [("reading_order_encoder.onnx", "encoder.onnx"),
                                   ("reading_order_decoder.onnx", "decoder.onnx")]:
         p = hf_hub_download(READING_ORDER_HF_REPO, repo_name, revision=WEIGHTS_REVISION)
         shutil.copy(p, READING_ORDER_DIR / local_name)
-    print(f"✅ Готово: {READING_ORDER_DIR}")
+    print(f"✅ Done: {READING_ORDER_DIR}")
     return str(READING_ORDER_DIR)

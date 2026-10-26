@@ -11,6 +11,19 @@ import cv2
 from .registry import Registry
 
 
+def pymupdf():
+    """PyMuPDF под новым именем модуля (с 1.24.3); `import fitz` в свежих версиях печатает
+    предупреждение об устаревании — в т.ч. в каждом воркере."""
+    try:
+        import pymupdf as mod
+    except ImportError:
+        import fitz as mod
+    return mod
+
+
+DEFAULT_THREADS = 8          # потоков ONNX Runtime на страницу по умолчанию (см. замер в __init__)
+
+
 def get_optimal_workers(max_workers: int = 4) -> int:
     """
     Определить оптимальное количество воркеров.
@@ -26,6 +39,15 @@ def get_optimal_workers(max_workers: int = 4) -> int:
         return 1
 
 
+class PageResult(list):
+    """Строки страницы (обычный список словарей) + .tables — таблицы при tables=True.
+    Ведёт себя как прежний список: итерация, len, индексы, json.dumps (без .tables)."""
+
+    def __init__(self, lines=(), tables=None):
+        super().__init__(lines)
+        self.tables = tables if tables is not None else []
+
+
 class OCRPipeline:
     """Pipeline для OCR: детекция + распознавание"""
 
@@ -34,7 +56,8 @@ class OCRPipeline:
                  deskew: bool = True, reading_order: bool = False, lm: bool = True,
                  num_threads: int = None, gpu: bool = False, orientation: bool = False,
                  oriented_lines: bool = None, unwarp=None, unwarp_gate=True,
-                 unwarp_margin: float = 1.05):
+                 unwarp_margin: float = 1.05, experimental_layout_order: bool = False,
+                 layout_order_method: str = "model", tables: bool = False):
         """
         Args:
             detector_name: имя детектора (по умолчанию 'dbnet-onnx')
@@ -48,7 +71,7 @@ class OCRPipeline:
             orientation: нейро-определение поворота страницы (0/90/180/270°) и выпрямление; ВЫКЛ по умолч.
             oriented_lines: УСТАРЕЛО. None (по умолч) = следовать deskew. Задавай True/False только
                 чтобы принудительно оторвать per-crop ориентацию от deskew (обратная совместимость).
-            num_threads: число CPU-ядер для инференса (None = min(доступные, 4))
+            num_threads: потоков ONNX Runtime на страницу (None = min(доступные, 8))
             gpu: исполнять на GPU/CUDA (ONNX Runtime; библиотеки CUDA — pip install "occular-ocr[gpu]"; иначе фолбэк на CPU)
             unwarp: опц. нейросетевое расправление изгиба (UVDoc). None = ВЫКЛ (по умолч).
                 Строка = HF model_id/локальная папка с весами (ленивая загрузка), либо готовый
@@ -64,17 +87,45 @@ class OCRPipeline:
                   unwarp_margin). Больше порог → реже срабатывает, но чище выигрыш.
                 • callable(res_orig, res_dew) -> bool — свой гейт: True = взять дьюарп. res_* это списки
                   результатов OCR ({text, confidence, quad}) для оригинала и дьюарпа.
+            experimental_layout_order: ЭКСПЕРИМЕНТАЛЬНЫЙ порядок чтения по layout-регионам (D-FINE-S;
+                строки без региона — отдельными объектами). ВЫКЛ по умолч. Не совместим с reading_order=True.
+                Строки и их распознавание те же, что в обычном режиме; меняется только порядок, к строкам
+                добавляются ключи layout_region / layout_label. Ничего не удаляется и не пропускается.
+            layout_order_method: чем упорядочивать блоки в режиме experimental_layout_order:
+                'model' (по умолч.) — обученная модель порядка блоков (ONNX, ~5 мс/стр на CPU);
+                'xycut' — геометрическое правило XY-cut. Объекты и правило «внутри блока сверху вниз»
+                у обоих одинаковые. Модель качается с HuggingFace при первом использовании.
+            tables: искать таблицы и раскладывать распознанные строки по их ячейкам. ВЫКЛ по умолч.
+                Строкам внутри таблицы добавляются ключи 'table' и 'cell'; структура таблиц — в .tables
+                у результата process_image и в ключе 'tables' у страницы PDF. Строку, которую детектор
+                склеил через границу ячеек, делим по пробелу у границы (ключ 'split'); текст кусков —
+                части исходного текста строки.
             unwarp_margin: порог-множитель для дефолтного readability-гейта (unwarp_gate=True).
                 Дьюарп берётся если read(дьюарп) > read(оригинал)·unwarp_margin. По умолч 1.05
                 (осторожно: ~3% срабатываний, лучшее соотношение луч/хуж ≈ 3:1).
         """
+        # аргументы конструктора как есть — процессы-воркеры (occular.parallel) строят по ним свой конвейер
+        self._init_kwargs = dict(
+            detector_name=detector_name, recognizer_name=recognizer_name,
+            detector_kwargs=dict(detector_kwargs or {}), recognizer_kwargs=dict(recognizer_kwargs or {}),
+            deskew=deskew, reading_order=reading_order, lm=lm, num_threads=num_threads, gpu=gpu,
+            orientation=orientation, oriented_lines=oriented_lines, unwarp=unwarp, unwarp_gate=unwarp_gate,
+            unwarp_margin=unwarp_margin, experimental_layout_order=experimental_layout_order,
+            layout_order_method=layout_order_method, tables=tables)
+        if reading_order and experimental_layout_order:
+            raise ValueError("reading_order=True and experimental_layout_order=True are mutually exclusive: "
+                             "choose one reading-order mode.")
+        if layout_order_method not in ("model", "xycut"):
+            raise ValueError(f"layout_order_method must be 'model' or 'xycut', not {layout_order_method!r}")
         detector_kwargs = detector_kwargs or {}
         recognizer_kwargs = recognizer_kwargs or {}
         self.gpu = bool(gpu)
 
-        # Число потоков: по умолчанию min(доступные ядра, 4) — чтобы не занять всю машину
+        # Число потоков на страницу: по умолчанию min(доступные ядра, 8). Замер (EPYC, 64 ядра):
+        # 4 потока — 2.35 с/стр, 8 — 1.64, 16 — 1.31, дальше не быстрее, а с 64 медленнее (1.53, 128 — 2.16)
         if num_threads is None:
-            num_threads = min(os.cpu_count() or 1, 4)
+            from .parallel import available_cpus
+            num_threads = min(available_cpus(), DEFAULT_THREADS)
         self.num_threads = max(1, int(num_threads))
         # резолвим дефолтное имя ДО проверки (иначе None не пройдёт "onnx" in ...)
         det_name = detector_name or Registry._default_detector
@@ -101,6 +152,24 @@ class OCRPipeline:
         self.oriented_lines = bool(_ol) and hasattr(self.detector, "detect_regions")
         self.reading_order = reading_order   # порядок чтения через layout-модель (по умолчанию ВЫКЛ)
         self._ro = None
+        # ЭКСПЕРИМЕНТ: порядок по регионам LayoutDetector + XY-cut. Модель создаётся сразу (не лениво),
+        # чтобы параллельные потоки PDF не гонялись за инициализацией.
+        self.experimental_layout_order = bool(experimental_layout_order)
+        self.layout_order_method = layout_order_method
+        self._layout = None
+        self._block_order = None
+        if self.experimental_layout_order:
+            from .layout import LayoutDetector
+            self._layout = LayoutDetector(num_threads=self.num_threads, gpu=self.gpu)
+            if layout_order_method == "model":
+                from .layout_order_model import BlockOrderModel
+                self._block_order = BlockOrderModel(num_threads=self.num_threads, gpu=self.gpu)
+        # Таблицы: модели создаются сразу (как layout) — параллельные потоки PDF их делят
+        self.tables = bool(tables)
+        self._tables = None
+        if self.tables:
+            from .tables import TableRecognizer
+            self._tables = TableRecognizer(num_threads=self.num_threads, gpu=self.gpu)
         if reading_order:
             from .reading_order import ReadingOrderModel
             self._ro = ReadingOrderModel(num_threads=self.num_threads, gpu=self.gpu)
@@ -145,17 +214,37 @@ class OCRPipeline:
             # False/None = blanket: применяем дьюарп без гейта (1 OCR)
             if not self.unwarp_gate:
                 image = self._unwarp.unwarp(image)
-                return self._ocr_page(image)
+                return self._with_tables(image, self._ocr_page(image))
             # гейт: OCR оригинала vs дьюарпа, решаем через _use_dewarp
             res_orig = self._ocr_page(image)
             try:
                 dew = self._unwarp.unwarp(image)
                 res_dew = self._ocr_page(dew)
             except Exception:
-                return res_orig
-            return res_dew if self._use_dewarp(res_orig, res_dew) else res_orig
+                return self._with_tables(image, res_orig)
+            if self._use_dewarp(res_orig, res_dew):
+                return self._with_tables(dew, res_dew)
+            return self._with_tables(image, res_orig)
 
-        return self._ocr_page(image)
+        return self._with_tables(image, self._ocr_page(image))
+
+    def _find_tables(self, image_rgb: np.ndarray, lines: List[Dict], scale: float = 1.0,
+                     split: bool = True):
+        """Таблицы на той же картинке, по которой распознаны строки (после deskew/orientation/unwarp):
+        строки, склеенные детектором через границу ячеек, делятся по пробелу у границы (split=False —
+        текстовый слой PDF, там строки не наши), затем раскладываются по ячейкам.
+        image_rgb — RGB, модели таблиц ждут BGR. Возвращает (строки, таблицы)."""
+        from .tables import attach_lines, split_crossing_lines
+        found = self._tables(np.ascontiguousarray(image_rgb[:, :, ::-1]))
+        if split and found:
+            lines = split_crossing_lines(found, lines, image_rgb, self.recognizer)
+        return lines, attach_lines(found, lines, scale=scale)
+
+    def _with_tables(self, image: np.ndarray, results: List[Dict]) -> List[Dict]:
+        if not self.tables:
+            return results
+        lines, tables = self._find_tables(image, results)
+        return PageResult(lines, tables=tables)
 
     def _use_dewarp(self, res_orig: List[Dict], res_dew: List[Dict]) -> bool:
         """Решение гейта: брать ли дьюарп. callable → свой предикат; число → readability×это;
@@ -170,7 +259,33 @@ class OCRPipeline:
         """OCR уже препроцессенной страницы: reading_order по регионам или обычный проход."""
         if self.reading_order and self._ro is not None:
             return self._ocr_by_regions(image)
+        if self.experimental_layout_order and self._layout is not None:
+            return self._ocr_layout_order(image)
         return self._ocr_whole(image)
+
+    def _ocr_layout_order(self, image: np.ndarray) -> List[Dict]:
+        """ЭКСПЕРИМЕНТ: обычный OCR всей страницы (те же строки и текст), затем порядок по layout-регионам
+        ТОЙ ЖЕ картинки (после deskew/orientation/unwarp) — координаты строк и регионов совпадают."""
+        import logging
+        from .layout_order import order_lines
+        results = self._ocr_whole(image)
+        layout = self._layout.detect(image)
+        boxes = []
+        for r in results:
+            q = np.asarray(r["quad"], dtype=float)
+            boxes.append([q[:, 0].min(), q[:, 1].min(), q[:, 0].max(), q[:, 1].max()])
+        if self._block_order is not None:
+            order, line_region, stats = self._block_order.order_lines(boxes, layout.regions,
+                                                                      layout.width, layout.height)
+        else:
+            order, line_region, stats = order_lines(boxes, layout.regions)
+        for r, ri in zip(results, line_region):
+            r["layout_region"] = int(ri) if ri >= 0 else None
+            r["layout_label"] = layout.regions[ri].label if ri >= 0 else None
+        logging.getLogger("occular.layout").info(
+            "layout_order[%s]: lines=%d regions=%d coverage_80=%.3f unassigned_30=%.3f",
+            self.layout_order_method, stats["lines"], stats["regions"], stats["coverage_80"], stats["unassigned_30"])
+        return [results[i] for i in order]
 
     def _ensure_unwarp(self):
         """Ленивая инициализация UVDocUnwarper из model_id-строки при первом использовании."""
@@ -276,14 +391,14 @@ class OCRPipeline:
         """
         path = Path(image_path)
         if not path.exists():
-            raise FileNotFoundError(f"Файл не найден: {image_path}")
+            raise FileNotFoundError(f"File not found: {image_path}")
         try:
             with Image.open(image_path) as img:
                 return np.array(img.convert('RGB'))
         except (UnidentifiedImageError, OSError) as e:
             raise ValueError(
-                f"Не удалось открыть изображение '{image_path}': "
-                f"файл повреждён или это не изображение ({e})"
+                f"Could not open image '{image_path}': "
+                f"the file is damaged or not an image ({e})"
             ) from e
 
     def process_pdf(self, pdf_path: str, dpi: int = 300, force_ocr: bool = False,
@@ -295,21 +410,23 @@ class OCRPipeline:
             pdf_path: путь к PDF файлу
             dpi: разрешение рендеринга для OCR (по умолчанию 300)
             force_ocr: принудительно использовать OCR даже если есть текстовый слой
-            workers: количество воркеров для параллельной обработки
-                     None = автоопределение (min(CPU, 4))
-                     1 = последовательная обработка
-                     N = N воркеров
+            workers: сколько страниц распознавать параллельно (отдельными процессами, см. occular.parallel)
+                     None = авто: по ядрам и свободной памяти (≈1.1 ГБ на процесс), не больше 16
+                     1 = последовательно в этом процессе
+                     N = N процессов (на больших машинах — до числа ядер). Процессы нужны, чтобы
+                         не упираться в GIL; без `if __name__ == "__main__":` в главном скрипте
+                         — потоки (не больше 8)
 
         Returns:
             Список словарей с результатами по страницам:
             [{"page": 1, "method": "text"|"ocr", "results": [...]}, ...]
         """
         try:
-            import fitz  # PyMuPDF
+            fitz = pymupdf()
         except ImportError as e:
             # PyMuPDF — обязательная зависимость; если импорт упал, причина в нём самом (битое колесо,
             # нет системной библиотеки) — показываем её, а не совет «установите pymupdf».
-            raise ImportError(f"PyMuPDF не импортируется ({e}). Переустановить: "
+            raise ImportError(f"PyMuPDF fails to import ({e}). Reinstall: "
                               f"pip install --force-reinstall \"pymupdf>=1.23.1\"") from e
 
         pdf_path = Path(pdf_path)
@@ -319,54 +436,54 @@ class OCRPipeline:
         doc = fitz.open(str(pdf_path))
         num_pages = len(doc)
 
-        # Определяем количество воркеров
-        if workers is None:
-            num_workers = get_optimal_workers(max_workers=4)
-        else:
-            num_workers = max(1, workers)
-
-        # Для 1 страницы или 1 воркера — последовательная обработка
-        if num_pages == 1 or num_workers == 1:
-            all_results = []
-            for page_num in range(num_pages):
-                result = self._process_pdf_page(doc, page_num, dpi, force_ocr)
-                all_results.append(result)
-            doc.close()
-            return all_results
-
-        # Параллельная обработка.
-        # PyMuPDF не thread-safe при общем Document, поэтому:
-        #  1) классифицируем страницы (текст vs OCR) в главном потоке — это дёшево, без рендера;
-        #  2) OCR-страницы рендерим ПО ОДНОЙ внутри воркера (каждый открывает свой хендл документа),
-        #     а не держим все пиксмапы страниц в RAM разом (иначе OOM на больших сканах @300 DPI).
+        # 1) классификация в главном процессе (дёшево, без рендера): страницы с текстовым слоем читаются
+        #    сразу, остальные — в OCR. PyMuPDF не thread-safe при общем Document: OCR-страницы каждый
+        #    воркер открывает и рендерит сам, ПО ОДНОЙ (иначе все пиксмапы @300 DPI разом в RAM → OOM).
         all_results = [None] * num_pages
         ocr_pages = []
         for page_num in range(num_pages):
             if not force_ocr:
                 text_result = self._extract_text_from_page(doc[page_num], page_num)
                 if text_result:
-                    all_results[page_num] = text_result
+                    all_results[page_num] = self._tables_for_text_page(doc[page_num], text_result, dpi)
                     continue
             ocr_pages.append(page_num)
         doc.close()
+        if not ocr_pages:
+            return all_results
 
-        if ocr_pages:
-            pdf_str = str(pdf_path)
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        from .parallel import (auto_workers, can_use_processes, processes_safe, run_tasks,
+                               threads_per_worker, THREAD_WORKERS_MAX)
+        num_workers = auto_workers(len(ocr_pages)) if workers is None else max(1, min(workers, len(ocr_pages)))
+        pdf_str = str(pdf_path)
+
+        # 2) OCR: один воркер — здесь же; иначе процессы (не упираются в GIL), а если их нельзя
+        #    (см. occular.parallel.processes_safe/can_use_processes) — потоки, не больше
+        #    THREAD_WORKERS_MAX: дальше потоки под GIL только мешают друг другу
+        if num_workers == 1:
+            for page_num in ocr_pages:
+                all_results[page_num] = self._render_and_ocr_page(pdf_str, page_num, dpi)
+        elif can_use_processes(self) and processes_safe():
+            tpw = threads_per_worker(num_workers, self.num_threads)
+            done = run_tasks(self, [("pdf", pdf_str, p, dpi, True) for p in ocr_pages], num_workers, tpw)
+            for page_num, res in zip(ocr_pages, done):
+                if isinstance(res, Exception):
+                    raise res
+                all_results[page_num] = res
+        else:
+            with ThreadPoolExecutor(max_workers=min(num_workers, THREAD_WORKERS_MAX)) as executor:
                 futures = {
                     executor.submit(self._render_and_ocr_page, pdf_str, page_num, dpi): page_num
                     for page_num in ocr_pages
                 }
                 for future in as_completed(futures):
-                    page_num = futures[future]
-                    all_results[page_num] = future.result()
-
+                    all_results[futures[future]] = future.result()
         return all_results
 
     def _render_and_ocr_page(self, pdf_path: str, page_num: int, dpi: int) -> Dict:
         """Открыть свой хендл документа, отрендерить ОДНУ страницу и распознать (для параллельного пути).
         Свой fitz.Document на задачу = потокобезопасно; в RAM живёт максимум num_workers пиксмапов."""
-        import fitz
+        fitz = pymupdf()
         doc = fitz.open(pdf_path)
         try:
             page = doc[page_num]
@@ -422,13 +539,31 @@ class OCRPipeline:
             image, _ = deskew_image(image)
         if self.reading_order and self._ro is not None:
             page_results = self._ocr_by_regions(image)
+        elif self.experimental_layout_order and self._layout is not None:
+            page_results = self._ocr_layout_order(image)
         else:
             page_results = self._ocr_whole(image)
-        return {
+        out = {
             "page": page_num + 1,
             "method": "ocr",
             "results": page_results
         }
+        if self.tables:
+            out["results"], out["tables"] = self._find_tables(image, page_results)
+        return out
+
+    def _tables_for_text_page(self, page, result: Dict, dpi: int) -> Dict:
+        """Текстовый слой PDF: строки в точках PDF, таблицы ищутся на отрендеренной странице и
+        переводятся в точки (пиксели / zoom)."""
+        if not self.tables:
+            return result
+        fitz = pymupdf()
+        zoom = dpi / 72
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+        image = image[:, :, :3].copy() if pix.n == 4 else image.copy()
+        _, result["tables"] = self._find_tables(image, result["results"], scale=1.0 / zoom, split=False)
+        return result
 
     def _process_pdf_page(self, doc, page_num: int, dpi: int, force_ocr: bool) -> Dict:
         """Обработать одну страницу PDF (последовательный режим)"""
@@ -438,11 +573,11 @@ class OCRPipeline:
         if not force_ocr:
             result = self._extract_text_from_page(page, page_num)
             if result:
-                return result
+                return self._tables_for_text_page(page, result, dpi)
 
         # OCR
         zoom = dpi / 72
-        import fitz
+        fitz = pymupdf()
         mat = fitz.Matrix(zoom, zoom)
         pix = page.get_pixmap(matrix=mat)
 

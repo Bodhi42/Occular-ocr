@@ -28,8 +28,8 @@ class ReadingOrderModel:
         enc, dec = _RO_DIR / "encoder.onnx", _RO_DIR / "decoder.onnx"
         if not enc.exists() or not dec.exists():
             raise FileNotFoundError(
-                f"Модель порядка чтения не найдена в {_RO_DIR}.\n"
-                "Скачайте её:  from occular import download_reading_order; download_reading_order()"
+                f"Reading-order model not found in {_RO_DIR}.\n"
+                "Download it:  from occular import download_reading_order; download_reading_order()"
             )
         from ._runtime import make_session
         self.enc = make_session(enc, num_threads, gpu)     # CPU по умолчанию; CUDA при gpu=True

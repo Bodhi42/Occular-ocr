@@ -2,7 +2,8 @@
 
 The **model weights** distributed with Occular-OCR — including, without limitation, the text
 detector, the text recognizer(s) (`svtr_lcnet` and `svtr_t`, for Russian/English and for the 12
-Cyrillic-script languages), the language model(s), and the optional reading-order model — are
+Cyrillic-script languages), the language model(s), the optional reading-order model, and the optional layout
+detector (`layout_dfine_s144k_fp32.onnx`) and its block-order model (`layout_order_blocks_fp32.onnx`) — are
 licensed under a **modified AI Pubs OpenRAIL-M** license. This applies to every such weight file
 shipped with Occular-OCR or distributed for it from Hugging Face (`Shivin11/occular-ocr`), whether
 downloaded automatically or placed in `weights/` by hand.

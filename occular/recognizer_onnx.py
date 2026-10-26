@@ -31,8 +31,8 @@ DEFAULT_ARCH = "svtr_lcnet"
 def arch_files(arch: str, family: str = "ru"):
     """(onnx_file, charset_file) для архитектуры и семейства ('ru' | 'cyr')."""
     if arch not in RECOGNIZER_ARCHS:
-        raise ValueError(f"неизвестная архитектура распознавателя {arch!r}; "
-                         f"доступны: {', '.join(RECOGNIZER_ARCHS)}")
+        raise ValueError(f"unknown recognizer architecture {arch!r}; "
+                         f"available: {', '.join(RECOGNIZER_ARCHS)}")
     return RECOGNIZER_ARCHS[arch][family]
 
 

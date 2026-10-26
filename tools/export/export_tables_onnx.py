@@ -1,14 +1,14 @@
-"""Экспорт модели структуры таблиц (split+merge, table_struct_split_merge_v2.pt) в два ONNX-графа.
+"""Экспорт модели структуры таблиц (split+merge; v4 — обучен на окнах-полосах) в два ONNX-графа.
 
 Модель принимает решения по своим же выходам (число полос, границы, вырезка клеток), поэтому
 целиком в ONNX не трассируется: трассировщик зашивает сетку примера как константу. Режем её:
 
-  table_struct_v3_main_fp32.onnx  — картинка 768×768 → логиты счётчиков и сепараторов + карта merge-признаков
+  table_struct_v4_main_fp32.onnx  — картинка 768×768 → логиты счётчиков и сепараторов + карта merge-признаков
   (numpy в occular.tables)        — пиковый декод границ, R/C, усреднение карты по клеткам, выборка на границах
-  table_struct_v3_merge_fp32.onnx — Grid-CNN по сетке клеток + MLP рёбер; оси r, c — динамические
+  table_struct_v4_merge_fp32.onnx — Grid-CNN по сетке клеток + MLP рёбер; оси r, c — динамические
 
 Нужен torch (только здесь, не в пакете).  Запуск:
-  python tools/export/export_tables_onnx.py <out_dir>
+  python tools/export/export_tables_onnx.py <checkpoint.pt> <out_dir>
 """
 import sys
 from pathlib import Path
@@ -63,21 +63,20 @@ def export(pt_path, out_dir):
     torch.backends.mha.set_fastpath_enabled(False)      # слитый оператор трансформера в ONNX не экспортируется
     d = m.mrg.proj.out_channels
     with torch.no_grad():
-        torch.onnx.export(Main(m), (torch.zeros(1, 3, 768, 768),), str(out_dir / "table_struct_v3_main_fp32.onnx"),
+        torch.onnx.export(Main(m), (torch.zeros(1, 3, 768, 768),), str(out_dir / "table_struct_v4_main_fp32.onnx"),
                           input_names=["x"], output_names=["rcnt", "rsep", "ccnt", "csep", "pmap"],
                           opset_version=17, dynamo=False)
         r, c = 5, 4
         args = (torch.zeros(1, d, r, c), torch.zeros(r, c - 1, d), torch.zeros(r, c - 1, 5),
                 torch.zeros(r - 1, c, d), torch.zeros(r - 1, c, 5))
-        torch.onnx.export(Merge(m.mrg), args, str(out_dir / "table_struct_v3_merge_fp32.onnx"),
+        torch.onnx.export(Merge(m.mrg), args, str(out_dir / "table_struct_v4_merge_fp32.onnx"),
                           input_names=["f", "fb_h", "lij_h", "fb_v", "lij_v"], output_names=["hor", "ver"],
                           dynamic_axes={"f": {2: "r", 3: "c"}, "fb_h": {0: "r", 1: "c1"}, "lij_h": {0: "r", 1: "c1"},
                                         "fb_v": {0: "r1", 1: "c"}, "lij_v": {0: "r1", 1: "c"},
                                         "hor": {0: "r", 1: "c1"}, "ver": {0: "r1", 1: "c"}},
                           opset_version=17, dynamo=False)
-    print("готово:", sorted(p.name for p in out_dir.glob("table_struct_v3_*.onnx")))
+    print("готово:", sorted(p.name for p in out_dir.glob("table_struct_v4_*.onnx")))
 
 
 if __name__ == "__main__":
-    from huggingface_hub import hf_hub_download
-    export(hf_hub_download("Shivin11/occular-ocr", "table_struct_split_merge_v2.pt"), sys.argv[1])
+    export(sys.argv[1], sys.argv[2])

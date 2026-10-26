@@ -10,6 +10,7 @@
 
 Без внешних зависимостей: выравнивание строк — на стандартном difflib.
 """
+import re
 from difflib import SequenceMatcher
 
 # символы, из которых состоит «код»: буквы (лат+кир), цифры и типичные разделители кодов
@@ -21,28 +22,30 @@ _CODECH = set(
 )
 
 
+_RUN = None
+
+
+def _run_re():
+    global _RUN
+    if _RUN is None:
+        _RUN = re.compile("[" + "".join(re.escape(c) for c in sorted(_CODECH)) + "]+")
+    return _RUN
+
+
 def _protected_mask(s: str, min_digits: int = 2, min_ratio: float = 0.5) -> list:
     """True для символов код-рана. Код = alnum-ран, который ЦИФРО-ДОМИНАНТНЫЙ:
     ≥min_digits цифр И доля цифр среди букв+цифр ≥min_ratio. Так защищаются реальные
     номера/серии/ИНН/суммы, но НЕ обычные слова со случайной OCR-цифрой (иначе слово
-    целиком бралось из greedy и портилось: 'судебного'→'сулебног0', '304'→'Зг0уч')."""
-    n = len(s)
-    m = [False] * n
-    i = 0
-    while i < n:
-        if s[i] in _CODECH:
-            j = i
-            while j < n and s[j] in _CODECH:
-                j += 1
-            run = s[i:j]
-            nd = sum(c.isdigit() for c in run)
-            nal = sum(c.isalnum() for c in run)
-            if nd >= min_digits and nal >= 2 and nd >= nal * min_ratio:
-                for k in range(i, j):
-                    m[k] = True
-            i = j
-        else:
-            i += 1
+    целиком бралось из greedy и портилось: 'судебного'→'сулебног0', '304'→'Зг0уч').
+    Раны ищет регулярное выражение, а не цикл по символам: это горячий путь (каждая строка
+    страницы, последовательно после параллельного декода)."""
+    m = [False] * len(s)
+    for mt in _run_re().finditer(s):
+        run = mt.group()
+        nd = sum(map(str.isdigit, run))
+        nal = sum(map(str.isalnum, run))
+        if nd >= min_digits and nal >= 2 and nd >= nal * min_ratio:
+            m[mt.start():mt.end()] = [True] * (mt.end() - mt.start())
     return m
 
 
@@ -53,6 +56,8 @@ def lock_codes(beam: str, greedy: str) -> str:
     greedy — акустическое argmax-чтение того же изображения (источник истины для кодов).
     Гарантия: цифро-содержащие alnum-раны из greedy присутствуют в результате дословно.
     """
+    if sum(map(str.isdigit, greedy)) < 2:                # кода (≥2 цифр в ране) быть не может
+        return beam
     pm = _protected_mask(greedy)
     if not any(pm):
         return beam
@@ -82,12 +87,10 @@ def greedy_ctc(logits_tc, chars) -> str:
     logits_tc — [T, C] (логиты или лог-вероятности, argmax одинаков); chars — список символов
     словаря (индекс класса k>=1 соответствует chars[k-1], 0 = CTC blank).
     """
-    idx = logits_tc.argmax(1)
-    out = []
-    prev = -1
-    for k in idx:
-        k = int(k)
-        if k != prev and k != 0:
-            out.append(chars[k - 1])
-        prev = k
-    return "".join(out)
+    import numpy as np
+    idx = np.asarray(logits_tc).argmax(1)
+    if idx.size == 0:
+        return ""
+    keep = idx != 0                                      # не blank
+    keep[1:] &= idx[1:] != idx[:-1]                      # и не повтор предыдущего кадра
+    return "".join([chars[k - 1] for k in idx[keep].tolist()])

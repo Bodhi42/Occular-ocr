@@ -66,7 +66,7 @@ def _merge_beams(beams):
 
 
 class LanguageModel:
-    """Shallow-fusion scorer over an n-gram model with the kenlm-like interface of ``_pylm.Model``."""
+    """Shallow-fusion scorer over an n-gram model through the interface of ``_pylm.Model``."""
 
     def __init__(self, model, state_cls, unigrams, prefix_checker, alpha, beta,
                  unk_score_offset=UNK_LOGP_OFFSET, score_boundary=True):

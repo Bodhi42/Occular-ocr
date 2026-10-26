@@ -259,6 +259,6 @@ def unstack_vertical_text(image: np.ndarray, canon_h: int = 48, gap_ratio: float
 def crop_point_to_page(region: TextRegion, xy: Tuple[float, float]) -> Tuple[float, float]:
     """Восстановить точку из координат crop обратно в координаты страницы (обратимость §1)."""
     if region.transform_to_page is None:
-        raise ValueError("region ещё не кропнут (transform_to_page пуст)")
+        raise ValueError("region is not cropped yet (transform_to_page is empty)")
     p = _map_points(region.transform_to_page, np.array([xy], dtype=np.float32))[0]
     return float(p[0]), float(p[1])

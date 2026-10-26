@@ -1,5 +1,105 @@
 # Changelog
 
+## 0.5.0
+
+- **Layout regions (new, optional): `LayoutDetector`.** Returns the regions of a page — box in
+  pixels of the input image, score, one of 18 labels — plus the page size the boxes refer to.
+  D-FINE-S detector, ONNX on CPU (~0.3 s per page at 4 threads), weights `layout_dfine_s144k_fp32.onnx`
+  (~42 MB) downloaded on first use. Default score threshold 0.6. Labels are informational only:
+  nothing is removed or skipped because of a label, and `TableRecognizer` is unchanged.
+- **Experimental reading order from layout regions (off by default).**
+  `OCRPipeline(experimental_layout_order=True)` / `Settings(experimental_layout_order=True)` reorders
+  the lines of the default mode by layout regions. The objects to order are the text regions plus
+  every line that no region covers by more than 30 % (instead of moving such lines to the end); inside
+  a region lines go top to bottom. The objects are ordered by a small trained block-order model
+  (`layout_order_method="model"`, default; 3.3M parameters, ONNX on CPU, ~5 ms per page, weights
+  `layout_order_blocks_fp32.onnx` ~13 MB downloaded on first use) or by a recursive XY-cut
+  (`layout_order_method="xycut"`). On held-out pages the two agree on most pages and are of similar
+  quality. Lines and text are identical to the default mode; each line gains `layout_region` and
+  `layout_label`. Mutually exclusive with `reading_order=True`, which is unchanged.
+- **Removed the `ocr_skel` alias.** The package was renamed `ocr_skel` → `occular` in 0.3.0 and the old
+  name has warned as deprecated since. Use `import occular` and `python -m occular`.
+- **Native decoder `occular-decode` 0.2.0 scales under load** (optional package, wheel in
+  `native/wheels/`). 0.1.0 copied every line's logits element by element while holding the GIL and the
+  code lock ran a per-line numpy argmax under the GIL, so concurrent requests queued up: 16 parallel
+  requests decoded 13k lines/s and 64 requests only 9.9k. Now the logits are read in place, lines are
+  handed out one per task with the heaviest first, and the acoustic greedy reading comes from the same
+  parallel pass: 49k lines/s at 16 requests, 47k at 64; one 77-line page at 16 threads 104 → 70 ms.
+  Same text, byte for byte. `occular` uses the new path automatically and still works with 0.1.0.
+  A macOS arm64 wheel (macOS 11+) is built as well: same text as pure Python on 599 lines, 15–50× faster
+  decoding.
+- **No PyMuPDF deprecation warning.** occular imported PyMuPDF as `fitz`, and PyMuPDF 1.28 prints
+  `The fitz API is deprecated` on that import — once per run, and once per worker process with
+  `workers`. It now imports `pymupdf` (falls back to `fitz` on PyMuPDF older than 1.24.3).
+- **All console output is in English** (#5): warnings, errors, `model_info()`, `print(Settings())` and the
+  CLI help and messages used to mix Russian and English (e.g. the LM line `[occular] LM (чисто-Python): …`).
+  A test now keeps Russian text out of the messages.
+- **Multi-page work scales across cores.** `process_pdf(workers=N)`, `ocr(...)` on PDFs and the CLI
+  (`--workers`, now also for a whole folder) run pages in worker *processes* taking pages from one queue,
+  instead of threads of one process. Threads were limited by Python's GIL: with the default pure-Python
+  decoder, PDF throughput peaked at 8 threads (0.66 pages/s on a 64-core machine) and then dropped
+  (0.44 at 128); a folder in the CLI was processed one file at a time whatever `--workers` said. Now:
+  1.57 pages/s at 8 workers, ~3 pages/s on a 512-page PDF with 16–128 workers. Each worker holds its
+  own models (~1.1 GB RAM; ONNX Runtime's memory arena is off in workers and freed memory is returned
+  after every page — with them a worker grew to ~1.9 GB); auto `workers` is limited by cores, free memory and 16. Processes need the
+  `if __name__ == "__main__":` guard in the calling script; without it occular uses threads (up to 8)
+  and warns once. Default `num_threads` (threads per page) is now `min(cores, 8)` instead of 4 (one
+  page: 2.35 → 1.64 s). The cores of the machine are split between workers by *physical* cores, read from
+  the CPU topology on Linux and macOS (on Apple Silicon all cores are physical: 6 workers on a 12-core M-series
+  chip get 2 threads each, 2.19 → 2.42 pages/s). The CLI folder mode now also reads `.gif`.
+- **Tables in the OCR pipeline: `Settings(tables=True)`** (also `OCRPipeline(tables=True)`,
+  `ocr(..., tables=True)`, `ocr_detailed(..., tables=True)`, CLI `--tables`; off by default). Tables are
+  found on the same page image the lines are read from (after deskew/rotation/dewarp), and the
+  recognized lines are put into cells: lines inside a table gain `table` and `cell`
+  (`r`, `c`, `rowspan`, `colspan`); `process_image` returns the usual list of lines with a `.tables`
+  attribute, PDF pages gain a `tables` key (on text-layer pages, in PDF points). Each table has its box,
+  row/column bands and cells with text. Plain text (`ocr`, `get_text`, CLI) prints tables as Markdown
+  tables in place. A line the detector glued across a cell border is divided at the whitespace by that border
+  (marked `"split": True`); the parts keep the original recognized text, cut at a space or a
+  letter/digit boundary located from the line's CTC alignment, never inside a word. `TableRecognizer` is unchanged.
+- **`TableRecognizer` on GPU: tables with a single row or a single column** crashed the merged-cell
+  step with a CUDA error (`BiasGelu: cudaErrorInvalidConfiguration` — the step has no cell edges along
+  one axis, and CUDA rejects the empty tensors), which failed the whole page. Such tables now run that
+  small step (2 MB) on CPU; results match the CPU path. On our test set 47 of 1830 pages had such a table.
+- **New table models in `TableRecognizer`.** Trained on our own visually annotated corpus of real
+  documents (forms, statements, invoices, books, scans). Measured on its held-out part:
+  - **Detection** is now a D-FINE-S box detector (`table_detect_dfine_v4_fp32.onnx`, 640×640, default
+    threshold 0.75): one box and score per table, so neighbouring tables no longer merge. F1 0.82
+    (0.43 for the previous segmentation detector).
+  - **Structure** (`table_struct_v4_main/merge_fp32.onnx`): row/column grid F1 0.92 (0.80 before),
+    merged cells F1 0.83 (0.58 before). On public benchmarks the grid F1 is 0.97 (PubTables-1M,
+    PubTabNet) and 0.88 on FinTabNet, which the model never saw.
+  - **Fixed: empty and missing rows/columns.** The number of rows/columns is now taken from the
+    detected separators instead of a separate count prediction. When the two disagreed, the grid got
+    zero-height rows or lost the last rows of the table. Merged cells are now computed on the final
+    grid.
+  - **Tall tables** (higher than half their width) are no longer squashed into a square: their rows
+    are found on overlapping horizontal strips and stitched by row lines; columns and merged cells
+    use the whole table. Row F1 on tables with more than 50 rows: 0.89 (was close to 0).
+  - `detect(..., min_frac=...)` still works (drops boxes smaller than this fraction of the page; default 0).
+- Without `TableRecognizer` and the new flag the output is byte-identical to 0.4.6.
+- **Installation never compiles on supported platforms** (issue #4). pip takes the newest allowed version
+  of a dependency and, if it has no wheel for your system, builds it from source instead of falling back
+  to an older wheel. On macOS 11–12 this compiled OpenCV 4.11 for ~45 minutes, and on Intel Macs it would
+  build PyMuPDF 2.0. macOS now gets OpenCV 4.10.0.84 (wheels for Apple silicon on macOS 11+ and Intel on
+  12+); Intel Macs with Python ≤ 3.12 get OpenCV 4.9.0.80 with NumPy < 2, which also covers macOS 11. On Linux aarch64 the plain
+  `onnxruntime` is installed instead of `onnxruntime-gpu`, whose ARM wheels need glibc 2.34+ (installation
+  failed on Ubuntu 20.04 / Debian 11).
+- **Windows: CLI output redirected to a file or pipe** (`ocr scan.pdf > out.txt`, `ocr --help | more`)
+  failed with `UnicodeEncodeError`: Python wrote Cyrillic in the locale code page (cp1252). The CLI now
+  writes UTF-8 when its output is not already UTF-8; the console is unchanged.
+- **Windows without the Visual C++ Redistributable** (a clean install) could not load pyclipper, ONNX
+  Runtime and PyMuPDF and failed with a bare "DLL load failed". There is now a separate
+  `py3-none-win_amd64` wheel that carries the five Microsoft C++ runtime DLLs these modules need
+  (unmodified, from the official redistributable, 14.51); `import occular` loads them only when Windows
+  has no copy of its own. pip on 64-bit Windows picks this wheel automatically. Elsewhere (e.g. Windows
+  on ARM) `import occular` still says what is missing and links Microsoft's installer.
+- **PyMuPDF < 2.0 everywhere.** PyMuPDF 2.0 (released 2026-10-19) depends on the CPU build of
+  `onnxruntime`, which collides with `onnxruntime-gpu` (two builds of one module overwriting each other's
+  files), and pulls in packages occular does not use; it also has no Intel-Mac wheels.
+  `tools/check_wheels.py` replays pip's choice for every platform and Python version against PyPI; run
+  it before each release.
+
 ## 0.4.6
 
 - **No PyTorch anywhere — every model is ONNX, on CPU and on GPU.** `gpu=True` now runs the same

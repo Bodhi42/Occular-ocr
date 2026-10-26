@@ -265,6 +265,47 @@ struct ScoredBeam {
 }
 
 #[inline]
+/// Оценка тяжести строки для порядка раздачи: сумма по кадрам числа символов-кандидатов, которые
+/// beam-поиск будет разворачивать (logit ≥ max − |token_min_logp|; надмножество настоящего порога,
+/// т.к. logsumexp ≥ 0). Время строки зависит от неоднозначности, а не от длины: корреляция с
+/// числом кадров 0.25, самые тяжёлые строки в сотни раз дороже медианной.
+fn cost_estimate(logits: &[f32], t: usize, c: usize, token_min_logp: f32) -> u64 {
+    let mut n = 0u64;
+    for i in 0..t {
+        let row = &logits[i * c..(i + 1) * c];
+        let m = row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let thr = m + token_min_logp;
+        n += row.iter().filter(|v| **v >= thr).count() as u64;
+    }
+    n
+}
+
+/// Декод пакета: тяжёлые строки — первыми, по одной строке на задачу rayon (иначе тяжёлые строки
+/// одной страницы, стоящие подряд, достаются одному потоку и дают хвост). Порядок результатов —
+/// как во входе.
+fn decode_ordered(inner: &Inner, lines: &[(std::borrow::Cow<'_, [f32]>, usize, usize)], bw: usize,
+                  with_greedy: bool) -> Vec<(String, f64, String)> {
+    let thr = inner.params.token_min_logp;
+    let costs: Vec<u64> = lines.par_iter().map(|(d, t, c)| cost_estimate(d, *t, *c, thr)).collect();
+    let mut order: Vec<usize> = (0..lines.len()).collect();
+    order.sort_by(|a, b| costs[*b].cmp(&costs[*a]));
+    let mut out: Vec<Option<(String, f64, String)>> = vec![None; lines.len()];
+    let done: Vec<(usize, (String, f64, String))> = order
+        .par_iter()
+        .with_max_len(1)
+        .map(|&i| {
+            let (d, t, c) = &lines[i];
+            let (text, score) = inner.decode_line(d, *t, *c, bw);
+            let g = if with_greedy { inner.greedy_text(d, *t, *c) } else { String::new() };
+            (i, (text, score, g))
+        })
+        .collect();
+    for (i, r) in done {
+        out[i] = Some(r);
+    }
+    out.into_iter().map(|r| r.unwrap()).collect()
+}
+
 fn sum_log_scores(a: f64, b: f64) -> f64 {
     let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
     hi + (1.0 + (lo - hi).exp()).ln()
@@ -333,6 +374,29 @@ struct Inner {
 }
 
 impl Inner {
+    /// Акустическое greedy-чтение (argmax по кадрам, без повторов и blank) — как code_lock.greedy_ctc:
+    /// при равенстве берётся первый максимум (как numpy.argmax).
+    fn greedy_text(&self, logits: &[f32], t: usize, c: usize) -> String {
+        let mut out = String::new();
+        let mut prev = usize::MAX;
+        for i in 0..t {
+            let row = &logits[i * c..(i + 1) * c];
+            let mut k = 0usize;
+            for j in 1..c {
+                if row[j] > row[k] {
+                    k = j;
+                }
+            }
+            if k != prev && k != 0 {
+                if let Some(l) = self.labels.get(k) {
+                    out.push_str(l);
+                }
+            }
+            prev = k;
+        }
+        out
+    }
+
     /// `LanguageModel.score_partial_token`
     fn partial_score(&self, part: &str) -> f64 {
         let is_oov = if self.vocab.has_prefix(part.as_bytes()) { 0.0 } else { 1.0 };
@@ -641,7 +705,7 @@ impl Decoder {
             });
         }
         let orders: [Order; 4] = built.try_into().map_err(|_| {
-            pyo3::exceptions::PyValueError::new_err("не удалось собрать 4 порядка n-грамм")
+            pyo3::exceptions::PyValueError::new_err("failed to build the 4 n-gram orders")
         })?;
         let unk = orders[0]
             .find(fold_word(FNV_OFFSET, b"<unk>"))
@@ -754,7 +818,7 @@ impl Decoder {
             let arr: PyReadonlyArray2<f32> = logits.extract()?;
             let shape = arr.shape();
             let a = arr.as_array();
-            (a.iter().cloned().collect::<Vec<f32>>(), shape[0], shape[1])
+            (a.as_slice().map(|s| s.to_vec()).unwrap_or_else(|| a.iter().cloned().collect::<Vec<f32>>()), shape[0], shape[1])
         };
         let inner = self.inner.clone();
         Ok(py.allow_threads(move || inner.decode_line(&data, t, c, bw)))
@@ -770,20 +834,50 @@ impl Decoder {
         beam_width: Option<usize>,
     ) -> PyResult<Vec<(String, f64)>> {
         let bw = beam_width.unwrap_or(self.inner.params.beam_width);
-        let mut lines: Vec<(Vec<f32>, usize, usize)> = Vec::with_capacity(batch.len());
-        for item in batch.iter() {
-            let arr: PyReadonlyArray2<f32> = item.extract()?;
-            let shape = arr.shape();
-            let a = arr.as_array();
-            lines.push((a.iter().cloned().collect::<Vec<f32>>(), shape[0], shape[1]));
-        }
+        // Без копирования: логиты читаются прямо из буферов numpy (массивы живут в arrs до конца вызова;
+        // их держит и вызывающий Python). Не C-непрерывный массив — копия. Раньше копировались все
+        // строки поэлементно под GIL — 30+ мс последовательной работы на страницу.
+        let arrs: Vec<PyReadonlyArray2<f32>> = batch.iter().map(|item| item.extract()).collect::<PyResult<_>>()?;
+        let lines: Vec<(std::borrow::Cow<'_, [f32]>, usize, usize)> = arrs
+            .iter()
+            .map(|arr| {
+                let shape = arr.shape();
+                let data = match arr.as_slice() {
+                    Ok(s) => std::borrow::Cow::Borrowed(s),
+                    Err(_) => std::borrow::Cow::Owned(arr.as_array().iter().cloned().collect::<Vec<f32>>()),
+                };
+                (data, shape[0], shape[1])
+            })
+            .collect();
         let inner = self.inner.clone();
-        Ok(py.allow_threads(move || {
-            lines
-                .par_iter()
-                .map(|(data, t, c)| inner.decode_line(data, *t, *c, bw))
-                .collect()
-        }))
+        Ok(py.allow_threads(|| decode_ordered(&inner, &lines, bw, false))
+            .into_iter().map(|(t, s, _)| (t, s)).collect())
+    }
+
+    /// Как decode_batch, но к каждой строке — её акустическое greedy-чтение (для замка кодов):
+    /// (текст, score, greedy). Считается в той же параллельной задаче, а не numpy по строке под GIL.
+    #[pyo3(signature = (batch, beam_width=None))]
+    fn decode_batch_greedy(
+        &self,
+        py: Python<'_>,
+        batch: &Bound<'_, PyList>,
+        beam_width: Option<usize>,
+    ) -> PyResult<Vec<(String, f64, String)>> {
+        let bw = beam_width.unwrap_or(self.inner.params.beam_width);
+        let arrs: Vec<PyReadonlyArray2<f32>> = batch.iter().map(|item| item.extract()).collect::<PyResult<_>>()?;
+        let lines: Vec<(std::borrow::Cow<'_, [f32]>, usize, usize)> = arrs
+            .iter()
+            .map(|arr| {
+                let shape = arr.shape();
+                let data = match arr.as_slice() {
+                    Ok(s) => std::borrow::Cow::Borrowed(s),
+                    Err(_) => std::borrow::Cow::Owned(arr.as_array().iter().cloned().collect::<Vec<f32>>()),
+                };
+                (data, shape[0], shape[1])
+            })
+            .collect();
+        let inner = self.inner.clone();
+        Ok(py.allow_threads(|| decode_ordered(&inner, &lines, bw, true)))
     }
 
     /// Топ-k гипотез строки: (текст, акустический score, score с языковой моделью).
@@ -800,7 +894,7 @@ impl Decoder {
             let arr: PyReadonlyArray2<f32> = logits.extract()?;
             let shape = arr.shape();
             let a = arr.as_array();
-            (a.iter().cloned().collect::<Vec<f32>>(), shape[0], shape[1])
+            (a.as_slice().map(|s| s.to_vec()).unwrap_or_else(|| a.iter().cloned().collect::<Vec<f32>>()), shape[0], shape[1])
         };
         let inner = self.inner.clone();
         let mut v = py.allow_threads(move || inner.decode_line_full(&data, t, c, bw));

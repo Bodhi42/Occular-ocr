@@ -33,8 +33,8 @@ def _warn_cpu_fallback(reason: str):
     global _warned
     if not _warned:
         from ._envcheck import ort_gpu_hint
-        hint = ort_gpu_hint() or 'Для GPU: pip install "occular-ocr[gpu]" (нужен драйвер NVIDIA).'
-        print(f"[occular] gpu=True, но CUDA недоступна ({reason}). Работаю на CPU. {hint}", file=sys.stderr)
+        hint = ort_gpu_hint() or 'For GPU: pip install "occular-ocr[gpu]" (needs an NVIDIA driver).'
+        print(f"[occular] gpu=True, but CUDA is unavailable ({reason}). Running on CPU. {hint}", file=sys.stderr)
         _warned = True
 
 
@@ -50,7 +50,7 @@ def resolve_providers(gpu: bool = False):
     if not gpu:
         return ['CPUExecutionProvider']
     if 'CUDAExecutionProvider' not in ort.get_available_providers():
-        _warn_cpu_fallback("в установленном onnxruntime нет CUDAExecutionProvider")
+        _warn_cpu_fallback("the installed onnxruntime has no CUDAExecutionProvider")
         return ['CPUExecutionProvider']
     _preload_cuda_libs()
     # TF32 выключен: иначе GPU расходится с CPU (UVDoc: 3,9 % пикселей против 0,02 %), а occular
@@ -62,10 +62,19 @@ def resolve_providers(gpu: bool = False):
             'CPUExecutionProvider']
 
 
+# Арена памяти CPU у ONNX Runtime растёт до пика входа и назад не отдаёт: у нас размеры входов всё время
+# разные (страницы, ширина строк), и процесс после нескольких страниц держит ~1.6 ГБ вместо ~0.65.
+# Без арены время страницы +4 % (1 поток) … +9 % (8 потоков). Выключаем там, где память умножается
+# на число процессов, — в воркерах occular.parallel; в обычном процессе арена остаётся (скорость).
+LOW_MEMORY = False
+
+
 def make_session(path, num_threads: int = 4, gpu: bool = False) -> "ort.InferenceSession":
     """InferenceSession для файла модели. При gpu=True проверяет, что CUDA реально поднялась
     (onnxruntime-gpu перечисляет CUDA в провайдерах даже без библиотек CUDA и молча уходит на CPU)."""
     so = ort.SessionOptions()
+    if LOW_MEMORY:
+        so.enable_cpu_mem_arena = False
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     so.intra_op_num_threads = max(1, int(num_threads))
     so.inter_op_num_threads = 1
@@ -81,7 +90,7 @@ def make_session(path, num_threads: int = 4, gpu: bool = False) -> "ort.Inferenc
     finally:
         _set_default_severity(2)
     if 'CUDAExecutionProvider' not in sess.get_providers():
-        _warn_cpu_fallback("не загрузились библиотеки CUDA/cuDNN или нет GPU")
+        _warn_cpu_fallback("CUDA/cuDNN libraries failed to load, or there is no GPU")
     return sess
 
 

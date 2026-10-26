@@ -38,12 +38,36 @@ def ort_gpu_hint():
     ort = dict(_installed(_ORT))
     if "onnxruntime-gpu" in ort and len(ort) > 1:
         others = ", ".join(n for n in ort if n != "onnxruntime-gpu")
-        return (f"{others} из другого пакета перезаписал файлы onnxruntime-gpu. Вернуть GPU: "
+        return (f"{others} from another package overwrote the onnxruntime-gpu files. To restore GPU: "
                 f"{reinstall_cmd('onnxruntime-gpu', ort['onnxruntime-gpu'])}")
     return None
 
 
+VCREDIST_URL = "https://aka.ms/vc14/vc_redist.x64.exe"
+
+
+def _msvc_runtime():
+    """Windows без Visual C++ Redistributable: pyclipper, onnxruntime и pymupdf не грузятся с невнятным
+    «DLL load failed» (им нужен msvcp140.dll, его нет ни в чистой Windows, ни в Python с python.org).
+    Колесо win_amd64 везёт рантайм с собой (_winrt.preload) — сюда попадаем только с универсальным
+    колесом (Windows на ARM, сборка из исходников) или если подгрузка не удалась."""
+    if sys.platform != "win32":
+        return
+    from . import _winrt
+    _winrt.preload()
+    try:
+        import pyclipper  # noqa: F401
+    except ImportError as e:
+        if "DLL load failed" in str(e):
+            raise ImportError(
+                "Microsoft Visual C++ Redistributable (msvcp140.dll) not found — pyclipper, onnxruntime "
+                f"and pymupdf cannot load without it. Install it from Microsoft: {VCREDIST_URL} "
+                "(once per computer) and restart Python."
+            ) from e
+
+
 def check():
+    _msvc_runtime()
     msgs = []
     ort = _installed(_ORT)
     if len({v for _, v in ort}) > 1:
@@ -54,16 +78,16 @@ def check():
         except Exception:
             loaded = None
         if loaded != dict(ort)[keep]:                     # после переустановки keep поверх — уже в порядке
-            msgs.append(f"в модуле onnxruntime смешаны файлы разных версий ({', '.join(f'{n} {v}' for n, v in ort)}).\n"
-                        f"  Починить: {reinstall_cmd(keep, dict(ort)[keep])}")
+            msgs.append(f"the onnxruntime module mixes files of different versions ({', '.join(f'{n} {v}' for n, v in ort)}).\n"
+                        f"  To fix: {reinstall_cmd(keep, dict(ort)[keep])}")
     cv = _installed(_CV2)
     if len(cv) > 1:
         try:
             import cv2  # noqa: F401
         except Exception as e:
             n, v = cv[0]                                  # приоритет — headless (зависимость occular)
-            msgs.append(f"cv2 не импортируется ({e}): в модуле перемешаны "
-                        f"{', '.join(f'{n} {v}' for n, v in cv)}.\n  Починить: {reinstall_cmd(n, v)}")
+            msgs.append(f"cv2 fails to import ({e}): the module mixes files of "
+                        f"{', '.join(f'{n} {v}' for n, v in cv)}.\n  To fix: {reinstall_cmd(n, v)}")
     for m in msgs:
-        print(f"[occular] ВНИМАНИЕ: {m}", file=sys.stderr)
+        print(f"[occular] WARNING: {m}", file=sys.stderr)
     return msgs

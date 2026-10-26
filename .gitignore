@@ -44,3 +44,10 @@ ocr_skel/weights/
 .github/
 det_rework_01/
 det_rework_02/
+
+# C++-рантайм Microsoft для колеса win_amd64 — кладёт tools/fetch_vcrt.py
+occular/_vcrt/*.dll
+
+# сборка нативного декодера
+native/crate/target/
+!occular/_vcrt/occular-vcrt.pth

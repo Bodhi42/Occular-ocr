@@ -68,8 +68,8 @@ class MultilingualRouter:
                 from .model_files import ensure_weight
                 self._langid = LangID(ensure_weight("langid_models.pkl"))
             except Exception as e:
-                warnings.warn(f"langid недоступен ({e}); авто-роутинг по языкам выключен — "
-                              f"задайте языки одной модели явно (languages=[...]).")
+                warnings.warn(f"langid is unavailable ({e}); automatic language routing is off — "
+                              f"set the languages explicitly (languages=[...]).")
         return self._langid
 
     # --- декод кир-строки по конфигу ---------------------------------------
@@ -87,7 +87,7 @@ class MultilingualRouter:
                     self._cyr.vocab, lm_files=ensure_cyr_lm(lang),
                     alpha=float(cfg.get('alpha', 0.5)), beta=float(cfg.get('beta', 1.0)))
             except Exception as e:
-                warnings.warn(f"LM языка '{lang}' недоступна ({e}); строки '{lang}' декодятся greedy.")
+                warnings.warn(f"The LM for '{lang}' is unavailable ({e}); '{lang}' lines are decoded greedily.")
                 self._cyr_lms[lang] = None
         return self._cyr_lms[lang]
 

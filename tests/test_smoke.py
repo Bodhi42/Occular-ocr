@@ -38,7 +38,7 @@ def test_public_api_importable():
 def test_cli_help():
     """CLI запускается и показывает справку (без весов)."""
     r = subprocess.run([sys.executable, "-m", "occular", "--help"],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)  # CLI пишет UTF-8 и в трубу
     assert r.returncode == 0
     assert "ocr" in (r.stdout + r.stderr).lower()
 

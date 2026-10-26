@@ -73,7 +73,8 @@ document workloads far better than any synthetic or public dataset can.
 - **Installs anywhere, no compiler.** The decoder is pure Python end to end, so you get top-tier
   decoding quality with **zero native dependencies**.
 - **CPU-first, GPU-ready.** Every model is ONNX and runs on CPU out of the box; set `gpu=True` to run the same models on CUDA through ONNX Runtime — no PyTorch.
-- **Batteries included.** Images and PDF, folder → `.txt`, reading order, automatic deskew.
+- **Batteries included.** Images and PDF, folder → `.txt`, tables (Markdown or cell by cell), reading
+  order, automatic deskew, and multi-page work spread across all CPU cores.
 
 ---
 
@@ -84,8 +85,23 @@ pip install occular-ocr
 ```
 
 That's it. No build tools, no CUDA. Model weights download automatically on first use and are cached
-locally. Requires a platform with ONNX Runtime wheels: Linux and Windows (x86_64), Linux aarch64 and
-macOS — except Intel Macs on Python 3.14, where ONNX Runtime has no build yet (use Python ≤ 3.13).
+locally. Every dependency installs from a prebuilt wheel — nothing is compiled — on:
+
+- Linux x86_64 and aarch64 (glibc 2.28+: Ubuntu 18.10+, Debian 10+, RHEL 8+);
+- Windows x64;
+- macOS 11+ on Apple silicon and Intel. ONNX Runtime limits newer Pythons: Python 3.13 needs
+  macOS 13+, Python 3.14 needs Apple silicon with macOS 14+ (no Intel build); use Python ≤ 3.12 on
+  older Macs.
+
+On 64-bit Windows nothing else is needed: the Windows wheel carries the Microsoft Visual C++ runtime that
+ONNX Runtime, PyMuPDF and pyclipper need, and uses it only when Windows has no copy of its own.
+
+Python 3.8–3.14; Python 3.15 is not supported yet (no ONNX Runtime build). Old pip versions don't
+recognise current Linux wheels — on Ubuntu 20.04 and similar the bundled pip 20 reports "No matching
+distribution found for onnxruntime"; run `python -m pip install -U pip` first.
+
+Windows on ARM is not supported (several dependencies have no ARM builds). If pip ever starts compiling
+something, `pip install --only-binary=:all: occular-ocr` makes it use the newest prebuilt version instead.
 
 ### GPU (optional)
 
@@ -100,6 +116,10 @@ pip install "occular-ocr[gpu]"    # CUDA + cuDNN from pip; no system CUDA needed
 
 Then pass `gpu=True` (see below). If CUDA can't be loaded, Occular says why once and runs on CPU.
 TF32 is disabled on GPU, so the text matches the CPU path.
+
+ONNX Runtime 1.27 and newer is built for CUDA 13 and needs an NVIDIA driver that supports CUDA 13. With
+an older driver (CUDA 12.x) it falls back to CPU; keep the last CUDA 12 build instead:
+`pip install "onnxruntime-gpu[cuda,cudnn]<1.27"`.
 
 ---
 
@@ -141,7 +161,7 @@ print(Settings())
 
 | Setting | Default | What it does |
 |---|---|---|
-| `num_threads` | `None` | CPU threads for inference. `None` → `min(cores, 4)`. |
+| `num_threads` | `None` | CPU threads per page. `None` → `min(cores, 8)`; beyond ~16 a single page gets no faster. For many pages use `workers`. |
 | `gpu` | `False` | Run on **GPU (CUDA via ONNX Runtime)**. CUDA libraries: `occular-ocr[gpu]`; falls back to CPU if unavailable. |
 | `orientation` | `False` | Detect a 0/90/180/270° page rotation and straighten it before detection — for phone photos and bulk scans that arrive sideways. Applied only when the model is at least 0.8 confident. |
 | `deskew` | `True` | Auto-correct skewed scans (a few degrees) before detection. |
@@ -150,6 +170,9 @@ print(Settings())
 | `unwarp_margin` | `1.05` | Readability multiplier for the default gate (`unwarp_gate=True`). Higher → dewarp fires less often, but only when it clearly helps. |
 | `lm` | `True` | Beam search + language model (best quality). `False` → fast greedy decoding, skips the LM download. |
 | `reading_order` | `False` | Order lines for multi-column layouts. Needs an optional model: call `download_reading_order()` once first (see [below](#optional-reading-order-for-multi-column-pages)). |
+| `experimental_layout_order` | `False` | **Experimental.** Order lines by layout regions (see [below](#experimental-reading-order-from-layout-regions)). Cannot be combined with `reading_order=True`. |
+| `layout_order_method` | `"model"` | How `experimental_layout_order` orders the blocks: `"model"` (trained block-order model) or `"xycut"` (geometric rule). |
+| `tables` | `False` | Find tables and put the recognized lines into their cells; in plain text tables come out as Markdown tables. See [Tables](#tables). |
 | `languages` | `None` | Text language(s). `None` → Russian/English. A list of codes (e.g. `["uk"]`) or `"auto"` enables the multilingual model (12 more Cyrillic-script languages). See [Languages](#languages). |
 | `detector` | `None` | Explicit detector name. `None` → default. |
 | `recognizer` | `None` | Recognizer architecture: `"svtr_lcnet"` (default — light, ~5× faster on CPU) or `"svtr_t"` (the larger model). Both run on CPU and GPU. |
@@ -160,7 +183,7 @@ print(Settings())
 from occular import OCRPipeline, Settings
 
 pipe = OCRPipeline(Settings(
-    num_threads=8,        # CPU threads (None -> min(cores, 4))
+    num_threads=8,        # CPU threads per page (None -> min(cores, 8))
     gpu=False,            # True -> CUDA via ONNX Runtime (CUDA libs: occular-ocr[gpu])
     orientation=False,    # detect 0/90/180/270 rotation and straighten the page
     deskew=True,          # auto-correct skewed scans
@@ -169,6 +192,7 @@ pipe = OCRPipeline(Settings(
     unwarp_margin=1.05,   # readability multiplier for the default unwarp gate
     lm=True,              # beam + language model; False -> greedy (faster, no LM download)
     reading_order=False,  # multi-column reading order (optional model, see below)
+    tables=False,         # find tables: lines get table/cell keys, text gets Markdown tables
     detector=None,        # None = default detector
     recognizer=None,      # None = svtr_lcnet; "svtr_t" = the larger model
 ))
@@ -184,15 +208,26 @@ pages = pipe.process_pdf(
     "document.pdf",
     dpi=300,          # render resolution for scanned PDFs (default 300)
     force_ocr=False,  # True: OCR even PDFs that already have a text layer
-    workers=4,        # parallel pages (None = auto min(cores, 4); 1 = sequential)
+    workers=None,     # pages in parallel, as separate processes (None = auto; 1 = sequential)
 )
+```
+
+Pages are processed by separate worker processes taking pages from a shared queue, so many cores are
+actually used. Each worker loads its own copy of the models (~1.1 GB of RAM per worker, ~0.26 GB of it shared libraries). On a 64-core
+machine, a 512-page scanned PDF goes at ~3 pages/s with 16–128 workers versus 0.57 with one. The
+processes need the usual guard in your script — without it occular falls back to threads (up to 8) and
+warns once:
+
+```python
+if __name__ == "__main__":
+    pages = pipe.process_pdf("document.pdf", workers=16)
 ```
 
 | PDF option | Default | What it does |
 |---|---|---|
 | `dpi` | `300` | Render resolution for scanned PDFs. Lower to `200` for speed on large batches. |
 | `force_ocr` | `False` | OCR even PDFs that already contain a text layer. |
-| `workers` | `None` | Parallel pages. `None` → auto `min(cores, 4)`; `1` → sequential. |
+| `workers` | `None` | Pages in parallel, as worker processes. `None` → auto by cores and free memory, up to 16; `1` → sequential; any larger number is honoured. |
 
 ### One-liners
 
@@ -254,10 +289,11 @@ ocr document.png --out result.json
 | `--gpu` | off | Run on GPU (CUDA via ONNX Runtime; CUDA libs: occular-ocr[gpu]). |
 | `--languages L` / `--lang L` | ru/en | Text language(s), comma-separated (`uk`, `ru,kk`), or `auto`. |
 | `--orientation` | off | Detect and straighten 0/90/180/270° page rotation. |
+| `--tables` | off | Find tables: Markdown tables in the text output, cells and structure in JSON. |
 | `--model M` | `svtr_lcnet` | Recognizer architecture: `svtr_lcnet` or `svtr_t`. |
 | `--dpi N` | `300` | PDF render resolution. |
 | `--force-ocr` | off | OCR even vector PDFs. |
-| `--workers N` | auto | Parallel workers (PDF pages / batch files). |
+| `--workers N` | auto | Pages in parallel, as worker processes (~1.1 GB each), for a PDF and for a whole folder (all files and PDF pages share one queue). |
 | `--out FILE` | — | Save a single file's structured results to JSON. |
 | `--json` | off | Print full JSON (with coordinates) to stdout. |
 
@@ -274,14 +310,91 @@ pipe = OCRPipeline(Settings(reading_order=True))
 model_info()                                   # show which weights are present locally
 ```
 
+### Experimental: reading order from layout regions
+
+`experimental_layout_order=True` orders the recognized lines using the layout regions of the same
+page. Each line goes to the text region that covers most of it (more than 30 %); a line that no region
+covers becomes its own object instead of being moved to the end. The regions and these lines are then
+put in order, and inside a region lines go top to bottom. By default the order comes from a small
+trained block-order model (`layout_order_method="model"`, ONNX on CPU, ~5 ms per page, weights
+downloaded on first use); `layout_order_method="xycut"` uses a recursive XY-cut instead. The lines
+and their text are exactly those of the default mode; only their order changes. Each line also gets
+`layout_region` (index or `None`) and `layout_label`.
+
+```python
+from occular import OCRPipeline
+
+pipe = OCRPipeline(experimental_layout_order=True)
+for line in pipe.process_image("page.png"):
+    print(line["layout_label"], line["text"])
+```
+
+Both methods see only the boxes, labels and scores of the regions, not the image; on held-out pages
+they are of similar quality, and neither replaces `reading_order=True`. When a region spans two
+columns, the lines of those columns are read top to bottom together; when regions are missed, the
+order rests on single lines. Separate documents photographed in one frame are not told apart.
+
 > 📓 Everything above is also in a runnable notebook: **[`examples.ipynb`](examples.ipynb)**.
 
 ---
 
+## Layout regions
+
+`LayoutDetector` returns the regions of a page — box, confidence and label — as a geometric basis
+for reading order and downstream processing:
+
+```python
+from occular import LayoutDetector
+
+layout = LayoutDetector().detect("page.png")     # path, PIL image or RGB numpy array
+print(layout.width, layout.height)              # page size the boxes refer to
+for r in layout.regions:                        # sorted by score
+    x1, y1, x2, y2 = r.bbox                     # pixels of the image you passed
+    print(r.label, round(r.score, 2), (x1, y1, x2, y2))
+
+layout.to_dict()                                 # {"width", "height", "regions": [{"bbox", "score", "label", "label_id"}]}
+```
+
+The model is a D-FINE-S detector (ONNX, CPU, ~0.3 s per page at 4 threads; weights ~42 MB,
+downloaded on first use). It predicts one of 18 labels: `Caption`, `Code`, `Equation`, `Figure`,
+`Footnote`, `Form`, `ListItem`, `PageFooter`, `PageHeader`, `Picture`, `SectionHeader`, `Table`,
+`TableOfContents`, `Text`, `TextInlineMath`, `stamp`, `signature`, `handwritten_text`. Regions below
+`score_threshold` (default 0.6) are dropped.
+
+Treat the boxes as the main output and the labels as hints. Occular never removes or skips text
+because of a label: lines inside a `Picture` region are still recognized, and tables come from the
+table models (`tables=True`, `TableRecognizer`), not from these labels. Label conventions are not guaranteed to follow any particular annotation
+guideline. In particular, a photographed document is sometimes labelled `Picture` as a whole, and
+tables are often labelled `Form`.
+
 ## Tables
 
-`TableRecognizer` finds tables on a page and reconstructs their structure — the row/column grid plus
-merged cells (`colspan`/`rowspan`):
+Turn on `tables` like any other setting. The pipeline finds tables on the same page image it reads
+(after deskew/rotation/dewarp), reconstructs each table's grid and merged cells (`colspan`/`rowspan`)
+and puts the recognized lines into cells:
+
+```python
+from occular import ocr, OCRPipeline, Settings
+
+print(ocr("invoice.png", tables=True))     # tables come out as Markdown tables in place
+
+pipe = OCRPipeline(Settings(tables=True))
+lines = pipe.process_image("invoice.png")  # the usual list of lines…
+for t in lines.tables:                     # …plus .tables
+    print(t["n_rows"], "×", t["n_cols"], t["bbox"])
+    for c in t["cells"]:                   # {"r", "c", "rowspan", "colspan", "text"}
+        print(c["r"], c["c"], c["text"])
+```
+
+Lines inside a table get two extra keys: `table` (its index) and `cell` (`r`, `c`, `rowspan`,
+`colspan`). For PDFs each page has a `tables` key; on pages with a text layer tables are found on a
+rendered copy of the page and given in PDF points, like the lines. When the line detector glues text
+from two neighbouring cells into one line, the line is divided at the whitespace by the cell border
+(such lines are marked `"split": True`); the parts keep the original recognized text, and text that
+runs across a ruling line without a gap is left whole. In plain text a merged cell's text goes into
+its top-left slot. On the command line: `ocr invoice.png --tables`.
+
+`TableRecognizer` is the low-level part — the grid and merged cells without text:
 
 ```python
 import cv2
@@ -296,14 +409,17 @@ for t in tr(page):
 ```
 
 Detection, the row/column grid and merged cells all run on ONNX (CPU or `gpu=True`), with no extra
-dependencies.
+dependencies. The detector returns one box per table (default threshold 0.75; `tr.detect(page, thr=...)`).
+Tables taller than half their width are read in overlapping horizontal strips, so long tables keep all
+their rows. On held-out real documents: detection F1 0.82, grid F1 0.92, merged cells F1 0.83.
 
 ## Optional: native decoder (faster)
 
 The decoding stack is pure Python by default. An optional Rust module, `occular-decode`, is a
 drop-in accelerator: **byte-identical output**, but 5–13× faster per line and 17–48× per page, with
 lower memory. Once installed it is picked up automatically (pure Python stays as the fallback).
-Build/install instructions are in [`native/README.md`](native/README.md).
+Version 0.2.0 also keeps scaling under concurrent load: on a 64-core machine 16 parallel callers decode
+~49 000 lines/s (0.1.0: 13 000). Build/install instructions are in [`native/README.md`](native/README.md).
 
 ---
 
@@ -313,9 +429,12 @@ Build/install instructions are in [`native/README.md`](native/README.md).
 image ─▶ deskew ─▶ DBNet detector ─▶ crops ─▶ SVTR recognizer ─▶ beam + n-gram LM ─▶ text
 ```
 
-The recognizer is a compact SVTR + CTC model exported to ONNX; the decoder is a CTC prefix beam search guided by a 4-gram
-Russian language model. The entire decoding stack — language model and beam search alike — is
-**pure Python**, which is what keeps `pip install` friction-free on every platform.
+Optional steps plug into this chain: page rotation (`orientation`) and dewarping (`unwarp`) before
+detection; tables (`tables`) and reading order (`reading_order`, `experimental_layout_order`) after
+recognition. The recognizer is a compact SVTR + CTC model exported to ONNX; the decoder is a CTC prefix
+beam search guided by a 4-gram Russian language model. The decoding stack — language model and beam
+search alike — is **pure Python** by default, which is what keeps `pip install` friction-free on every
+platform; the optional Rust decoder gives the same output faster.
 
 ---
 
@@ -328,10 +447,11 @@ Weights are fetched automatically on first use and cached:
 | DBNet text detector | finds text lines on the page |
 | SVTR recognizer | reads text inside each line |
 | Page-orientation model *(optional)* | detects 0/90/180/270° page rotation (`orientation=True`) |
-| Table detector + structure *(optional)* | tables → row/column grid + merged cells |
+| Table detector + structure *(optional)* | tables → row/column grid + merged cells (`tables=True`, `TableRecognizer`) |
 | UVDoc *(optional)* | dewarps curved/photographed pages (`unwarp=...`) |
 | Language model | rescoring for the beam decoder |
 | Reading-order model *(optional)* | orders lines for multi-column layouts |
+| Layout detector D-FINE-S *(optional)* | page regions: box, score, label (`LayoutDetector`) |
 
 Inspect what's present locally:
 
@@ -438,7 +558,8 @@ Occular-OCR заточен под русский и читает его знач
   с **нулевыми нативными зависимостями**.
 - **Сначала CPU, GPU — по желанию.** Все модели — ONNX, работают на CPU из коробки; `gpu=True`
   исполняет те же модели на CUDA через ONNX Runtime — без PyTorch.
-- **Всё в комплекте.** Картинки и PDF, папка → `.txt`, порядок чтения, автоматическое выпрямление наклона.
+- **Всё в комплекте.** Картинки и PDF, папка → `.txt`, таблицы (Markdown или по ячейкам), порядок
+  чтения, автоматическое выпрямление наклона, многостраничная обработка на всех ядрах CPU.
 
 ---
 
@@ -449,8 +570,23 @@ pip install occular-ocr
 ```
 
 И всё. Без сборочных инструментов, без CUDA. Веса моделей скачиваются автоматически при первом запуске
-и кэшируются. Нужна платформа, для которой есть сборки ONNX Runtime: Linux и Windows (x86_64), Linux
-aarch64 и macOS — кроме Intel-маков на Python 3.14, где сборки ONNX Runtime пока нет (подойдёт Python ≤ 3.13).
+и кэшируются. Все зависимости ставятся готовыми колёсами — ничего не компилируется — на:
+
+- Linux x86_64 и aarch64 (glibc 2.28+: Ubuntu 18.10+, Debian 10+, RHEL 8+);
+- Windows x64;
+- macOS 11+ на Apple silicon и Intel. Новые Python ограничивает ONNX Runtime: Python 3.13 —
+  macOS 13+, Python 3.14 — только Apple silicon с macOS 14+ (сборки под Intel нет); на старых маках
+  подойдёт Python ≤ 3.12.
+
+На 64-битной Windows больше ничего ставить не нужно: колесо для Windows везёт с собой C++-рантайм
+Microsoft, нужный ONNX Runtime, PyMuPDF и pyclipper, и берёт его, только если в системе своего нет.
+
+Python 3.8–3.14; Python 3.15 пока не поддерживается (нет сборки ONNX Runtime). Старый pip не узнаёт
+современные Linux-колёса: на Ubuntu 20.04 и похожих встроенный pip 20 пишет «No matching distribution
+found for onnxruntime» — сначала `python -m pip install -U pip`.
+
+Windows на ARM не поддерживается (у части зависимостей нет сборок под ARM). Если pip всё же начал что-то
+компилировать, `pip install --only-binary=:all: occular-ocr` заставит его взять новейшую готовую версию.
 
 ### GPU (опционально)
 
@@ -465,6 +601,10 @@ pip install "occular-ocr[gpu]"    # CUDA + cuDNN из pip; системная CU
 
 Затем передай `gpu=True` (см. ниже). Если CUDA не загрузилась, Occular один раз скажет почему и
 продолжит на CPU. TF32 на GPU выключен, поэтому текст совпадает с CPU-путём.
+
+ONNX Runtime 1.27 и новее собран под CUDA 13 и требует драйвер NVIDIA с поддержкой CUDA 13. Со старым
+драйвером (CUDA 12.x) он откатывается на CPU — поставь последнюю сборку под CUDA 12:
+`pip install "onnxruntime-gpu[cuda,cudnn]<1.27"`.
 
 ---
 
@@ -506,7 +646,7 @@ print(Settings())
 
 | Настройка | По умолчанию | Что делает |
 |---|---|---|
-| `num_threads` | `None` | CPU-потоки для инференса. `None` → `min(ядра, 4)`. |
+| `num_threads` | `None` | CPU-потоков на страницу. `None` → `min(ядра, 8)`; больше ~16 одна страница быстрее не идёт. Для многих страниц — `workers`. |
 | `gpu` | `False` | Гонять на **GPU (CUDA через ONNX Runtime)**. Библиотеки CUDA — `occular-ocr[gpu]`; при отсутствии — откат на CPU. |
 | `orientation` | `False` | Определять поворот страницы 0/90/180/270° и выпрямлять до детекции — для фото с телефона и массовых сканов, приходящих боком. Срабатывает только при уверенности модели ≥ 0.8. |
 | `deskew` | `True` | Автовыпрямление наклонённых сканов (несколько градусов) перед детекцией. |
@@ -515,6 +655,9 @@ print(Settings())
 | `unwarp_margin` | `1.05` | Порог-множитель читаемости для дефолтного гейта (`unwarp_gate=True`). Больше → расправление срабатывает реже, но только когда явно помогает. |
 | `lm` | `True` | Beam + языковая модель (лучшее качество). `False` → быстрое жадное декодирование, без скачивания LM. |
 | `reading_order` | `False` | Упорядочивание строк для многоколоночных макетов. Нужна опциональная модель: один раз вызови `download_reading_order()` (см. [ниже](#опционально-порядок-чтения-для-многоколоночных-страниц)). |
+| `experimental_layout_order` | `False` | **Эксперимент.** Порядок строк по layout-регионам (см. [ниже](#экспериментально-порядок-чтения-по-layout-регионам)). Не совместим с `reading_order=True`. |
+| `layout_order_method` | `"model"` | Чем упорядочивать блоки в `experimental_layout_order`: `"model"` (обученная модель порядка блоков) или `"xycut"` (геометрическое правило). |
+| `tables` | `False` | Находить таблицы и раскладывать распознанные строки по ячейкам; в обычном тексте таблицы выводятся Markdown-таблицами. См. [Таблицы](#таблицы). |
 | `languages` | `None` | Язык(и) текста. `None` → русский/английский. Список кодов (напр. `["uk"]`) или `"auto"` включает многоязычную модель (ещё 12 языков на кириллице). См. [Языки](#языки). |
 | `detector` | `None` | Явное имя детектора. `None` → по умолчанию. |
 | `recognizer` | `None` | Архитектура распознавателя: `"svtr_lcnet"` (по умолчанию — лёгкая, ~5× быстрее на CPU) или `"svtr_t"` (крупная). Обе работают и на CPU, и на GPU. |
@@ -525,7 +668,7 @@ print(Settings())
 from occular import OCRPipeline, Settings
 
 pipe = OCRPipeline(Settings(
-    num_threads=8,        # CPU-потоки (None -> min(ядра, 4))
+    num_threads=8,        # CPU-потоков на страницу (None -> min(ядра, 8))
     gpu=False,            # True -> CUDA через ONNX Runtime (библиотеки CUDA: occular-ocr[gpu])
     orientation=False,    # определять поворот 0/90/180/270 и выпрямлять страницу
     deskew=True,          # автовыпрямление наклона
@@ -534,6 +677,7 @@ pipe = OCRPipeline(Settings(
     unwarp_margin=1.05,   # порог-множитель читаемости для дефолтного гейта
     lm=True,              # beam + языковая модель; False -> жадное (быстрее, без скачивания LM)
     reading_order=False,  # порядок чтения для многоколоночных (опц. модель, см. ниже)
+    tables=False,         # таблицы: у строк ключи table/cell, в тексте — Markdown-таблицы
     detector=None,        # None = детектор по умолчанию
     recognizer=None,      # None = svtr_lcnet; "svtr_t" = крупная модель
 ))
@@ -549,15 +693,26 @@ pages = pipe.process_pdf(
     "document.pdf",
     dpi=300,          # разрешение рендеринга сканов (по умолчанию 300)
     force_ocr=False,  # True: OCR даже для PDF с текстовым слоем
-    workers=4,        # параллельные страницы (None = авто min(ядра, 4); 1 = последовательно)
+    workers=None,     # страниц параллельно, отдельными процессами (None = авто; 1 = последовательно)
 )
+```
+
+Страницы обрабатывают отдельные процессы-воркеры, которые берут их из общей очереди, — так реально
+используются все ядра. Каждый воркер держит свою копию моделей (~1.1 ГБ памяти на воркер, из них ~0.26 ГБ — общие библиотеки). На
+64-ядерной машине 512-страничный скан в PDF идёт ~3 стр/с при 16–128 воркерах против 0.57 с одним.
+Процессам нужна обычная защита в скрипте — без неё occular обрабатывает страницы потоками (до 8)
+и один раз предупреждает:
+
+```python
+if __name__ == "__main__":
+    pages = pipe.process_pdf("document.pdf", workers=16)
 ```
 
 | Опция PDF | По умолчанию | Что делает |
 |---|---|---|
 | `dpi` | `300` | Разрешение рендеринга сканов. Снизь до `200` ради скорости на больших пачках. |
 | `force_ocr` | `False` | OCR даже для PDF, где уже есть текстовый слой. |
-| `workers` | `None` | Параллельные страницы. `None` → авто `min(ядра, 4)`; `1` → последовательно. |
+| `workers` | `None` | Страниц параллельно, процессами-воркерами. `None` → авто по ядрам и свободной памяти, до 16; `1` → последовательно; любое большее число — как задано. |
 
 ### Однострочники
 
@@ -619,10 +774,11 @@ ocr document.png --out result.json
 | `--gpu` | выкл | Гонять на GPU (CUDA через ONNX Runtime; библиотеки CUDA: occular-ocr[gpu]). |
 | `--languages L` / `--lang L` | ru/en | Язык(и) текста через запятую (`uk`, `ru,kk`) или `auto`. |
 | `--orientation` | выкл | Определять и выпрямлять поворот страницы 0/90/180/270°. |
+| `--tables` | выкл | Находить таблицы: в тексте — Markdown-таблицы, в JSON — ячейки и структура. |
 | `--model M` | `svtr_lcnet` | Архитектура распознавателя: `svtr_lcnet` или `svtr_t`. |
 | `--dpi N` | `300` | Разрешение рендеринга PDF. |
 | `--force-ocr` | выкл | OCR даже для векторных PDF. |
-| `--workers N` | авто | Параллельные воркеры (страницы PDF / файлы батча). |
+| `--workers N` | авто | Страниц параллельно, процессами-воркерами (~1.1 ГБ каждый), для PDF и для целой папки (все файлы и страницы PDF — одна очередь). |
 | `--out FILE` | — | Сохранить результат одиночного файла в JSON. |
 | `--json` | выкл | Вывести полный JSON (с координатами) в stdout. |
 
@@ -639,14 +795,90 @@ pipe = OCRPipeline(Settings(reading_order=True))
 model_info()                                   # показать, какие веса есть локально
 ```
 
+### Экспериментально: порядок чтения по layout-регионам
+
+`experimental_layout_order=True` упорядочивает распознанные строки по layout-регионам той же
+страницы. Строка относится к текстовому региону, который покрывает её больше чем на 30 %; строка вне
+регионов становится отдельным объектом, а не уходит в конец. Затем регионы и такие строки
+выстраиваются по порядку, а внутри региона строки идут сверху вниз. По умолчанию порядок задаёт
+небольшая обученная модель порядка блоков (`layout_order_method="model"`, ONNX на CPU, ~5 мс на
+страницу, веса качаются при первом использовании); `layout_order_method="xycut"` — рекурсивный XY-cut.
+Строки и текст — ровно те же, что в обычном режиме; меняется только порядок. У каждой строки
+появляются `layout_region` (индекс или `None`) и `layout_label`.
+
+```python
+from occular import OCRPipeline
+
+pipe = OCRPipeline(experimental_layout_order=True)
+for line in pipe.process_image("page.png"):
+    print(line["layout_label"], line["text"])
+```
+
+Оба способа видят только рамки, метки и уверенность регионов, а не саму картинку; на отложенных
+страницах они сопоставимы по качеству, и ни один не заменяет `reading_order=True`. Если регион
+захватил две колонки, их строки читаются вместе сверху вниз; при пропущенных регионах порядок держится
+на отдельных строках. Несколько документов в одном кадре не различаются.
+
 > 📓 Всё вышеперечисленное есть и в исполняемом ноутбуке: **[`examples.ipynb`](examples.ipynb)**.
 
 ---
 
+## Layout-регионы
+
+`LayoutDetector` возвращает регионы страницы — прямоугольник, уверенность и метку — как
+геометрическую основу для порядка чтения и дальнейшей обработки:
+
+```python
+from occular import LayoutDetector
+
+layout = LayoutDetector().detect("page.png")     # путь, PIL-картинка или RGB numpy
+print(layout.width, layout.height)              # размер страницы, в которой заданы боксы
+for r in layout.regions:                        # по убыванию score
+    x1, y1, x2, y2 = r.bbox                     # пиксели переданной картинки
+    print(r.label, round(r.score, 2), (x1, y1, x2, y2))
+
+layout.to_dict()                                 # {"width", "height", "regions": [{"bbox", "score", "label", "label_id"}]}
+```
+
+Модель — детектор D-FINE-S (ONNX, CPU, ~0.3 с на страницу в 4 потока; веса ~42 МБ, качаются при
+первом использовании). Метки — одна из 18: `Caption`, `Code`, `Equation`, `Figure`, `Footnote`,
+`Form`, `ListItem`, `PageFooter`, `PageHeader`, `Picture`, `SectionHeader`, `Table`,
+`TableOfContents`, `Text`, `TextInlineMath`, `stamp`, `signature`, `handwritten_text`. Регионы ниже
+`score_threshold` (по умолчанию 0.6) отбрасываются.
+
+Основной результат — боксы, метки — подсказки. Occular никогда не удаляет и не пропускает текст из-за
+метки: строки внутри `Picture` распознаются, а таблицы находят табличные модели (`tables=True`,
+`TableRecognizer`), а не эти метки.
+Соответствие меток какой-либо инструкции по разметке не гарантируется. В частности, сфотографированный
+документ иногда целиком помечается `Picture`, а таблицы часто — `Form`.
+
 ## Таблицы
 
-`TableRecognizer` находит таблицы на странице и восстанавливает их структуру — сетку строк/столбцов
-и объединённые ячейки (`colspan`/`rowspan`):
+Таблицы включаются как любая другая настройка — `tables`. Конвейер ищет таблицы на той же картинке,
+по которой читает текст (после выпрямления, поворота и расправления), восстанавливает сетку и
+объединённые ячейки (`colspan`/`rowspan`) и раскладывает распознанные строки по ячейкам:
+
+```python
+from occular import ocr, OCRPipeline, Settings
+
+print(ocr("invoice.png", tables=True))     # таблицы — Markdown-таблицами на своём месте
+
+pipe = OCRPipeline(Settings(tables=True))
+lines = pipe.process_image("invoice.png")  # обычный список строк…
+for t in lines.tables:                     # …и .tables
+    print(t["n_rows"], "×", t["n_cols"], t["bbox"])
+    for c in t["cells"]:                   # {"r", "c", "rowspan", "colspan", "text"}
+        print(c["r"], c["c"], c["text"])
+```
+
+Строки внутри таблицы получают два ключа: `table` (номер таблицы) и `cell` (`r`, `c`, `rowspan`,
+`colspan`). У страниц PDF — ключ `tables`; на страницах с текстовым слоем таблицы ищутся на
+отрендеренной копии страницы и даются в точках PDF, как и строки. Если детектор строк склеил текст двух
+соседних ячеек в одну строку, она делится по пробелу у границы ячейки (у таких строк `"split": True`);
+текст частей — исходный распознанный, а текст, переходящий через линию без пробела, не режется. В обычном тексте текст объединённой ячейки стоит в её левой верхней клетке.
+В командной строке: `ocr invoice.png --tables`.
+
+`TableRecognizer` — низкоуровневая часть: сетка и объединённые ячейки без текста:
 
 ```python
 import cv2
@@ -661,14 +893,19 @@ for t in tr(page):
 ```
 
 Детекция, сетка строк/столбцов и объединённые ячейки — всё на ONNX (CPU или `gpu=True`), без
-доп. зависимостей.
+доп. зависимостей. Детектор даёт по рамке на таблицу (порог по умолчанию 0.75; `tr.detect(page, thr=...)`).
+Таблицы выше половины своей ширины читаются перекрывающимися горизонтальными полосами, поэтому длинные
+таблицы не теряют строки. На отложенных реальных документах: детекция F1 0.82, сетка F1 0.92,
+объединённые ячейки F1 0.83.
 
 ## Опционально: нативный декодер (быстрее)
 
 Стек декодирования по умолчанию на чистом Python. Опциональный Rust-модуль `occular-decode` —
 ускоритель без правок кода: **результат байт-в-байт тот же**, но декод в 5–13 раз быстрее на строку
 и в 17–48 раз на страницу, при меньшем расходе памяти. После установки подхватывается автоматически
-(чистый Python остаётся фолбэком). Установка/сборка — в [`native/README.md`](native/README.md).
+(чистый Python остаётся фолбэком). Версия 0.2.0 к тому же масштабируется под нагрузкой: на 64-ядерной
+машине 16 одновременных запросов декодируют ~49 000 строк/с (в 0.1.0 — 13 000). Установка/сборка — в
+[`native/README.md`](native/README.md).
 
 ---
 
@@ -678,9 +915,12 @@ for t in tr(page):
 картинка ─▶ deskew ─▶ DBNet-детектор ─▶ кропы ─▶ SVTR-распознаватель ─▶ beam + n-gram LM ─▶ текст
 ```
 
-Распознаватель — компактная SVTR + CTC модель, экспортированная в ONNX; декодер — CTC prefix beam
-search с 4-gram русской языковой моделью. Весь стек декодирования — и языковая модель, и beam-поиск —
-**на чистом Python**, поэтому `pip install` проходит гладко на любой платформе.
+Необязательные шаги встраиваются в эту цепочку: поворот страницы (`orientation`) и расправление
+(`unwarp`) — до детекции; таблицы (`tables`) и порядок чтения (`reading_order`,
+`experimental_layout_order`) — после распознавания. Распознаватель — компактная SVTR + CTC модель,
+экспортированная в ONNX; декодер — CTC prefix beam search с 4-gram русской языковой моделью. Стек
+декодирования — и языковая модель, и beam-поиск — по умолчанию **на чистом Python**, поэтому
+`pip install` проходит гладко на любой платформе; опциональный Rust-декодер даёт тот же результат быстрее.
 
 ---
 
@@ -693,10 +933,11 @@ search с 4-gram русской языковой моделью. Весь сте
 | DBNet-детектор текста | находит строки текста на странице |
 | SVTR-распознаватель | читает текст внутри каждой строки |
 | Модель ориентации страницы *(опц.)* | определяет поворот страницы 0/90/180/270° (`orientation=True`) |
-| Детектор + структура таблиц *(опц.)* | таблицы → сетка строк/столбцов + объединённые ячейки |
+| Детектор + структура таблиц *(опц.)* | таблицы → сетка строк/столбцов + объединённые ячейки (`tables=True`, `TableRecognizer`) |
 | UVDoc *(опц.)* | расправляет изогнутые/сфотографированные страницы (`unwarp=...`) |
 | Языковая модель | rescoring для beam-декодера |
 | Модель порядка чтения *(опц.)* | упорядочивает строки для многоколоночных макетов |
+| Layout-детектор D-FINE-S *(опц.)* | регионы страницы: бокс, score, метка (`LayoutDetector`) |
 
 Посмотреть, что есть локально:
 
