@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.6.0
+## 0.5.1
+
+The same code was briefly published as 0.6.0, which is yanked; use 0.5.1.
 
 - **`reading_order` now means reading order by layout regions, and it is on by default.** Lines come out
   in reading order: multi-column pages are read column by column instead of across. Layout regions plus
