@@ -146,15 +146,10 @@ def processes_safe() -> bool:
 
 
 def can_use_processes(pipeline) -> bool:
-    """Пул процессов воспроизводит конвейер по аргументам конструктора. Нельзя, если в нём
-    объект вместо имени/настройки (готовый UVDocUnwarper, свой callable-гейт) или детектор/
-    распознаватель, зарегистрированный вне occular (в новом процессе его не будет)."""
+    """Пул процессов воспроизводит конвейер по аргументам конструктора. Нельзя, если детектор или
+    распознаватель зарегистрирован вне occular (в новом процессе его не будет)."""
     kw = getattr(pipeline, "_init_kwargs", None)
     if kw is None:
-        return False
-    if kw.get("unwarp") is not None and not isinstance(kw["unwarp"], str):
-        return False
-    if callable(kw.get("unwarp_gate")):
         return False
     from .registry import Registry
     for name, table, default in ((kw.get("detector_name"), Registry._detectors, Registry._default_detector),

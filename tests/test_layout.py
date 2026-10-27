@@ -1,7 +1,7 @@
-"""Тесты layout-регионов и ЭКСПЕРИМЕНТАЛЬНОГО порядка чтения по ним.
+"""Тесты layout-регионов и порядка чтения по ним (обученная модель порядка блоков).
 
-Геометрические тесты (order_lines / xy_cut) не требуют весов. Они проверяют инварианты
-(каждая строка ровно один раз, детерминизм, сироты не теряются) и несколько синтетических раскладок.
+Тесты обвязки порядка не требуют весов: модель подменяется геометрической заглушкой (объекты сверху
+вниз), и проверяются инварианты (каждая строка ровно один раз, детерминизм, сироты не теряются).
 Прохождение синтетики НЕ гарантирует правильный порядок чтения на реальных страницах.
 Тесты с реальной моделью пропускаются, если веса недоступны.
 """
@@ -11,8 +11,22 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from occular.layout_order import order_lines, xy_cut, text_blocks
+from occular.layout_order import text_blocks
 from occular.layout import LayoutRegion, LayoutResult, LAYOUT_LABELS
+
+
+class _GeoOrder:
+    """Заглушка модели порядка блоков: объекты сверху вниз, затем слева направо (по признакам x0/y0)."""
+    def __init__(self):
+        from occular.layout_order_model import BlockOrderModel
+        self.order_lines = BlockOrderModel.order_lines.__get__(self)
+
+    def order_units(self, feats, labels):
+        return sorted(range(len(labels)), key=lambda i: (feats[i, 1], feats[i, 0]))
+
+
+def order_lines(lines, regions, width=1000, height=1400):
+    return _GeoOrder().order_lines(lines, regions, width, height)
 
 
 def R(x1, y1, x2, y2, label="Text"):
@@ -70,35 +84,6 @@ def test_identical_coordinates_deterministic():
     assert r1 == r2 and len(set(r1)) == 1        # все строки в одном (первом по порядку) регионе
 
 
-def test_xy_cut_ties_deterministic():
-    boxes = [[0, 0, 10, 10]] * 5
-    assert xy_cut(boxes) == [0, 1, 2, 3, 4]
-
-
-# ---------- синтетические раскладки ----------
-
-def test_two_columns():
-    left = column_lines(50, 450, 100, 6)
-    right = column_lines(550, 950, 100, 6)
-    lines = [l for pair in zip(left, right) for l in pair]          # вход перемешан построчно
-    regs = [R(40, 90, 460, 290), R(540, 90, 960, 290)]
-    order, reg, _ = order_lines(lines, regs)
-    assert_permutation(order, 12)
-    assert order == [0, 2, 4, 6, 8, 10, 1, 3, 5, 7, 9, 11]          # вся левая колонка, затем правая
-
-
-def test_missing_region_in_middle_is_not_moved_to_end():
-    top = column_lines(50, 900, 50, 3)
-    mid = column_lines(50, 900, 300, 3)                              # регион пропущен детектором
-    bot = column_lines(50, 900, 600, 3)
-    lines = top + mid + bot
-    regs = [R(40, 40, 910, 150), R(40, 590, 910, 700)]
-    order, reg, st = order_lines(lines, regs)
-    assert order == list(range(9))                                   # середина осталась в середине
-    assert reg[3:6] == [-1, -1, -1]
-    assert st["unassigned_30"] == pytest.approx(3 / 9)
-
-
 def test_nested_regions_no_duplicates():
     lines = column_lines(100, 800, 100, 8)
     regs = [R(50, 50, 900, 400, "Form"), R(90, 90, 810, 200, "Text"), R(90, 90, 810, 200, "Text"),
@@ -108,21 +93,22 @@ def test_nested_regions_no_duplicates():
     assert order == list(range(8))
 
 
-def test_multiple_documents_in_frame():
-    # два документа рядом, у каждого заголовок и абзац; второй без регионов (не найден)
-    a_title, a_body = [[50, 50, 400, 80]], column_lines(50, 400, 120, 5)
-    b_title, b_body = [[550, 60, 900, 90]], column_lines(550, 900, 130, 5)
-    lines = a_title + a_body + b_title + b_body
-    regs = [R(40, 40, 410, 90, "SectionHeader"), R(40, 110, 410, 280)]
-    order, reg, _ = order_lines(lines, regs)
-    assert_permutation(order, 12)
-    assert order == list(range(12))                                  # документ A целиком, затем B
-
-
 def test_stamp_signature_are_not_blocks_and_hw_inside_form_absorbed():
     regs = [R(0, 0, 500, 500, "Form"), R(10, 10, 100, 40, "handwritten_text"),
             R(600, 0, 700, 50, "handwritten_text"), R(0, 0, 50, 50, "stamp"), R(0, 0, 60, 60, "signature")]
     assert text_blocks(regs) == [0, 2]
+
+
+def test_nested_blocks_dropped_lines_read_with_outer():
+    """Книжная страница: найдены верхняя половина колонки, нижняя и вся колонка. Половины — не блоки,
+    иначе строки абзаца расходятся по «половине» и «целому» и читаются вразнобой."""
+    top, bottom, whole = R(50, 190, 590, 640), R(50, 650, 590, 990), R(50, 190, 590, 990)
+    assert text_blocks([top, bottom, whole]) == [2]
+    assert text_blocks([R(0, 0, 100, 100), R(0, 0, 100, 100)]) == [0]          # дубль — остаётся первый
+    assert text_blocks([R(0, 0, 100, 100), R(200, 0, 300, 100)]) == [0, 1]    # рядом, не вложены — оба
+    lines = column_lines(60, 580, 200, 25, h=20, gap=10)
+    order, reg, _ = order_lines(lines, [top, bottom, whole])
+    assert order == list(range(25)) and set(reg) == {2}
 
 
 def test_coverage_and_unassigned_are_different_numbers():
@@ -147,10 +133,9 @@ class _FakeLayout:
 def _bare_pipeline(results, regions, block_order=None):
     from occular.pipeline import OCRPipeline
     p = OCRPipeline.__new__(OCRPipeline)
-    p.reading_order, p._ro = False, None
-    p.experimental_layout_order = True
+    p.reading_order = True
     p._layout = _FakeLayout(regions)
-    p._block_order, p.layout_order_method = block_order, ("model" if block_order is not None else "xycut")
+    p._block_order = block_order if block_order is not None else _GeoOrder()
     p.seen_whole = []
     def whole(image):
         p.seen_whole.append(image)
@@ -182,16 +167,13 @@ def test_pipeline_no_regions_and_empty_page():
     assert [r["text"] for r in out] == ["1", "2"] and all(r["layout_region"] is None for r in out)
 
 
-def test_modes_are_exclusive_and_defaults_unchanged():
-    from occular import Settings
-    from occular.pipeline import OCRPipeline
-    s = Settings()
-    assert s.reading_order is False and s.experimental_layout_order is False
-    with pytest.raises(ValueError):
-        OCRPipeline(reading_order=True, experimental_layout_order=True)
-    assert s.layout_order_method == "model"
-    with pytest.raises(ValueError):
-        OCRPipeline(experimental_layout_order=True, layout_order_method="magic")
+def test_reading_order_is_default_and_single_setting():
+    from occular import Settings, OCRPipeline
+    assert Settings().reading_order is True
+    for gone in ("experimental_layout_order", "layout_order_method"):
+        assert not hasattr(Settings(), gone)
+        with pytest.raises(TypeError):
+            OCRPipeline(**{gone: True})
 
 
 # ---------- обученный порядок блоков ----------
@@ -247,7 +229,7 @@ def test_pipeline_uses_block_order_model():
     regs = [LayoutRegion((0, 0, 100, 50), 0.9, "Text", 14), LayoutRegion((200, 0, 300, 50), 0.9, "Text", 14)]
     p = _bare_pipeline(results, regs, block_order=_FakeBlockOrder([1, 0]))
     out = p._ocr_page(np.zeros((100, 400, 3), np.uint8))
-    assert [r["text"] for r in out] == ["R", "L"]  # порядок от модели, а не XY-cut (тот дал бы L, R)
+    assert [r["text"] for r in out] == ["R", "L"]  # порядок от модели, а не геометрия (та дала бы L, R)
 
 
 def _block_order_or_skip():

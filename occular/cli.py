@@ -128,6 +128,11 @@ Examples:
         help="Find tables: Markdown tables in the text output, lines by cell and the structure in JSON"
     )
     parser.add_argument(
+        "--no-reading-order",
+        action="store_true",
+        help="Print lines top to bottom instead of in reading order by layout regions"
+    )
+    parser.add_argument(
         "--model",
         type=str,
         choices=["svtr_lcnet", "svtr_t"],
@@ -172,7 +177,8 @@ Examples:
             languages=languages,
             orientation=args.orientation,
             gpu=args.gpu,
-            tables=args.tables
+            tables=args.tables,
+            reading_order=not args.no_reading_order
         )
     except Exception as e:
         print(f"Initialization error: {e}", file=sys.stderr)
@@ -187,10 +193,6 @@ Examples:
     _run_single(pipeline, input_path, args)
 
 
-def _by_y(lines):
-    return sorted(lines, key=lambda r: r["quad"][0][1])
-
-
 def _plain_text(pipeline, file_path: Path, args) -> str:
     """Распознать один файл и вернуть только текст (страницы PDF разделены пустой строкой)."""
     from .tables import compose_text
@@ -199,9 +201,9 @@ def _plain_text(pipeline, file_path: Path, args) -> str:
         results = pipeline.process_pdf(
             str(file_path), dpi=args.dpi, force_ocr=args.force_ocr, workers=args.workers
         )
-        return "\n\n".join(compose_text(_by_y(page["results"]), page.get("tables")) for page in results)
+        return "\n\n".join(compose_text(page["results"], page.get("tables")) for page in results)
     results = pipeline.process_image(str(file_path))
-    return compose_text(_by_y(results), getattr(results, "tables", None))
+    return compose_text(results, getattr(results, "tables", None))
 
 
 def _run_batch(pipeline, input_dir: Path, args):
@@ -260,9 +262,9 @@ def _run_batch(pipeline, input_dir: Path, args):
                 return
             if tasks[i][0] == "image":
                 lines, tables = got[0]
-                text = compose_text(_by_y(lines), tables)
+                text = compose_text(lines, tables)
             else:
-                text = "\n\n".join(compose_text(_by_y(pg["results"]), pg.get("tables")) for pg in got)
+                text = "\n\n".join(compose_text(pg["results"], pg.get("tables")) for pg in got)
             out_path = out_dir / (f.stem + ".txt")
             out_path.write_text(text, encoding="utf-8")
             ok += 1
@@ -317,9 +319,9 @@ def _run_single(pipeline, input_path: Path, args):
         if is_pdf:
             for page in results:
                 print(f"--- Page {page['page']} ---")
-                print(compose_text(_by_y(page["results"]), page.get("tables")))
+                print(compose_text(page["results"], page.get("tables")))
         else:
-            print(compose_text(_by_y(results), getattr(results, "tables", None)))
+            print(compose_text(results, getattr(results, "tables", None)))
 
 
 if __name__ == "__main__":

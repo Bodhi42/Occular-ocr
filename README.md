@@ -165,13 +165,9 @@ print(Settings())
 | `gpu` | `False` | Run on **GPU (CUDA via ONNX Runtime)**. CUDA libraries: `occular-ocr[gpu]`; falls back to CPU if unavailable. |
 | `orientation` | `False` | Detect a 0/90/180/270° page rotation and straighten it before detection — for phone photos and bulk scans that arrive sideways. Applied only when the model is at least 0.8 confident. |
 | `deskew` | `True` | Auto-correct skewed scans (a few degrees) before detection. |
-| `unwarp` | `None` | Neural dewarping (UVDoc) for curved or photographed pages. `None` → off. A Hugging Face model id or local folder with `model.onnx` (e.g. `"Shivin11/occular-uvdoc"`), or a ready `UVDocUnwarper`. Runs on ONNX, no extra dependencies. |
-| `unwarp_gate` | `True` | How to decide whether to apply the dewarp (when `unwarp` is set). `True` → readability self-gate: apply only if it improves text readability by at least `unwarp_margin`×. `False`/`None` → always apply. A number → use it as the readability threshold. A callable `(res_orig, res_dewarped) -> bool` → your own rule. |
-| `unwarp_margin` | `1.05` | Readability multiplier for the default gate (`unwarp_gate=True`). Higher → dewarp fires less often, but only when it clearly helps. |
+| `unwarp` | `False` | Neural dewarping (UVDoc, ONNX) for curved or photographed pages. `True` → dewarp only when the text then reads better (each page is recognized twice, ~2× time); `"always"` → always dewarp, without the check (hurts flat pages). The model is downloaded on first use. |
 | `lm` | `True` | Beam search + language model (best quality). `False` → fast greedy decoding, skips the LM download. |
-| `reading_order` | `False` | Order lines for multi-column layouts. Needs an optional model: call `download_reading_order()` once first (see [below](#optional-reading-order-for-multi-column-pages)). |
-| `experimental_layout_order` | `False` | **Experimental.** Order lines by layout regions (see [below](#experimental-reading-order-from-layout-regions)). Cannot be combined with `reading_order=True`. |
-| `layout_order_method` | `"model"` | How `experimental_layout_order` orders the blocks: `"model"` (trained block-order model) or `"xycut"` (geometric rule). |
+| `reading_order` | `True` | Reading order by layout regions: multi-column pages are read column by column (see [below](#reading-order)). `False` = plain top to bottom. |
 | `tables` | `False` | Find tables and put the recognized lines into their cells; in plain text tables come out as Markdown tables. See [Tables](#tables). |
 | `languages` | `None` | Text language(s). `None` → Russian/English. A list of codes (e.g. `["uk"]`) or `"auto"` enables the multilingual model (12 more Cyrillic-script languages). See [Languages](#languages). |
 | `detector` | `None` | Explicit detector name. `None` → default. |
@@ -187,11 +183,9 @@ pipe = OCRPipeline(Settings(
     gpu=False,            # True -> CUDA via ONNX Runtime (CUDA libs: occular-ocr[gpu])
     orientation=False,    # detect 0/90/180/270 rotation and straighten the page
     deskew=True,          # auto-correct skewed scans
-    unwarp=None,          # UVDoc dewarp for curved/photo pages: "Shivin11/occular-uvdoc" or a local folder with model.onnx
-    unwarp_gate=True,     # True -> apply only if it improves readability (x unwarp_margin); False -> always; number -> custom threshold; callable -> your rule
-    unwarp_margin=1.05,   # readability multiplier for the default unwarp gate
+    unwarp=False,         # dewarp curved/photo pages: True -> only when it reads better, "always" -> always
     lm=True,              # beam + language model; False -> greedy (faster, no LM download)
-    reading_order=False,  # multi-column reading order (optional model, see below)
+    reading_order=True,   # reading order by layout regions; False = top to bottom
     tables=False,         # find tables: lines get table/cell keys, text gets Markdown tables
     detector=None,        # None = default detector
     recognizer=None,      # None = svtr_lcnet; "svtr_t" = the larger model
@@ -290,6 +284,7 @@ ocr document.png --out result.json
 | `--languages L` / `--lang L` | ru/en | Text language(s), comma-separated (`uk`, `ru,kk`), or `auto`. |
 | `--orientation` | off | Detect and straighten 0/90/180/270° page rotation. |
 | `--tables` | off | Find tables: Markdown tables in the text output, cells and structure in JSON. |
+| `--no-reading-order` | off | Print lines top to bottom instead of in reading order. |
 | `--model M` | `svtr_lcnet` | Recognizer architecture: `svtr_lcnet` or `svtr_t`. |
 | `--dpi N` | `300` | PDF render resolution. |
 | `--force-ocr` | off | OCR even vector PDFs. |
@@ -297,42 +292,37 @@ ocr document.png --out result.json
 | `--out FILE` | — | Save a single file's structured results to JSON. |
 | `--json` | off | Print full JSON (with coordinates) to stdout. |
 
-### Optional: reading order for multi-column pages
+### Reading order
 
-Off by default. Download the model once; without it `reading_order=True` raises an error that says how to get it.
+On by default (`reading_order=True`): lines come out in reading order, so multi-column pages are read
+column by column, not across. occular finds the layout regions of the page (`LayoutDetector`), puts
+each line into the text region that covers most of it (more than 30 %) — a line that no region covers
+becomes its own object — and a small trained model (ONNX on CPU, ~5 ms per page) puts the regions and
+these lines in order; inside a region lines go top to bottom. The weights (~55 MB) are downloaded on
+first use (or ahead of time with `download_reading_order()`). Lines and their text do not depend on
+the order; each line also gets `layout_region` (index or `None`) and `layout_label`.
 
-```python
-from occular import download_reading_order, OCRPipeline, Settings, model_info
+Measured on 755 English pages of OmniDocBench with human-annotated order (share of line pairs from
+different blocks that come in the right order):
 
-download_reading_order()                       # one-time download
-pipe = OCRPipeline(Settings(reading_order=True))
-
-model_info()                                   # show which weights are present locally
-```
-
-### Experimental: reading order from layout regions
-
-`experimental_layout_order=True` orders the recognized lines using the layout regions of the same
-page. Each line goes to the text region that covers most of it (more than 30 %); a line that no region
-covers becomes its own object instead of being moved to the end. The regions and these lines are then
-put in order, and inside a region lines go top to bottom. By default the order comes from a small
-trained block-order model (`layout_order_method="model"`, ONNX on CPU, ~5 ms per page, weights
-downloaded on first use); `layout_order_method="xycut"` uses a recursive XY-cut instead. The lines
-and their text are exactly those of the default mode; only their order changes. Each line also gets
-`layout_region` (index or `None`) and `layout_label`.
+| | all pages | one column | two columns | three columns |
+|---|---|---|---|---|
+| `reading_order=True` (default) | 92.0 % | 98.6 % | 84.3 % | 79.3 % |
+| `reading_order=False` (top to bottom) | 85.4 % | 99.3 % | 72.8 % | 63.5 % |
 
 ```python
 from occular import OCRPipeline
 
-pipe = OCRPipeline(experimental_layout_order=True)
-for line in pipe.process_image("page.png"):
+pipe = OCRPipeline()                          # reading order by layout regions
+pipe = OCRPipeline(reading_order=False)       # plain top to bottom, no layout models
+for line in OCRPipeline().process_image("page.png"):
     print(line["layout_label"], line["text"])
 ```
 
-Both methods see only the boxes, labels and scores of the regions, not the image; on held-out pages
-they are of similar quality, and neither replaces `reading_order=True`. When a region spans two
-columns, the lines of those columns are read top to bottom together; when regions are missed, the
+The model sees only the boxes, labels and scores of the regions, not the image. When a region spans
+two columns, the lines of those columns are read top to bottom together; when regions are missed, the
 order rests on single lines. Separate documents photographed in one frame are not told apart.
+Text-layer PDF pages keep the order of their text layer.
 
 > 📓 Everything above is also in a runnable notebook: **[`examples.ipynb`](examples.ipynb)**.
 
@@ -430,7 +420,7 @@ image ─▶ deskew ─▶ DBNet detector ─▶ crops ─▶ SVTR recognizer �
 ```
 
 Optional steps plug into this chain: page rotation (`orientation`) and dewarping (`unwarp`) before
-detection; tables (`tables`) and reading order (`reading_order`, `experimental_layout_order`) after
+detection; tables (`tables`) and reading order (`reading_order`) after
 recognition. The recognizer is a compact SVTR + CTC model exported to ONNX; the decoder is a CTC prefix
 beam search guided by a 4-gram Russian language model. The decoding stack — language model and beam
 search alike — is **pure Python** by default, which is what keeps `pip install` friction-free on every
@@ -650,13 +640,9 @@ print(Settings())
 | `gpu` | `False` | Гонять на **GPU (CUDA через ONNX Runtime)**. Библиотеки CUDA — `occular-ocr[gpu]`; при отсутствии — откат на CPU. |
 | `orientation` | `False` | Определять поворот страницы 0/90/180/270° и выпрямлять до детекции — для фото с телефона и массовых сканов, приходящих боком. Срабатывает только при уверенности модели ≥ 0.8. |
 | `deskew` | `True` | Автовыпрямление наклонённых сканов (несколько градусов) перед детекцией. |
-| `unwarp` | `None` | Нейро-расправление изгиба (UVDoc) для изогнутых или сфотографированных страниц. `None` → выкл. Строка — HF model id или локальная папка с `model.onnx` (напр. `"Shivin11/occular-uvdoc"`), либо готовый `UVDocUnwarper`. Работает на ONNX, без доп. зависимостей. |
-| `unwarp_gate` | `True` | Чем решать, применять ли расправление (когда `unwarp` задан). `True` → гейт по читаемости: применять, только если текст стал читаемее минимум в `unwarp_margin`× раз. `False`/`None` → применять всегда. Число → использовать как порог читаемости. Callable `(res_orig, res_dewarped) -> bool` → свой критерий. |
-| `unwarp_margin` | `1.05` | Порог-множитель читаемости для дефолтного гейта (`unwarp_gate=True`). Больше → расправление срабатывает реже, но только когда явно помогает. |
+| `unwarp` | `False` | Нейро-расправление изгиба (UVDoc, ONNX) для изогнутых и сфотографированных страниц. `True` → расправлять, только если текст так читается лучше (страница распознаётся дважды, время ~×2); `"always"` → расправлять всегда, без проверки (вредит плоским страницам). Модель качается при первом использовании. |
 | `lm` | `True` | Beam + языковая модель (лучшее качество). `False` → быстрое жадное декодирование, без скачивания LM. |
-| `reading_order` | `False` | Упорядочивание строк для многоколоночных макетов. Нужна опциональная модель: один раз вызови `download_reading_order()` (см. [ниже](#опционально-порядок-чтения-для-многоколоночных-страниц)). |
-| `experimental_layout_order` | `False` | **Эксперимент.** Порядок строк по layout-регионам (см. [ниже](#экспериментально-порядок-чтения-по-layout-регионам)). Не совместим с `reading_order=True`. |
-| `layout_order_method` | `"model"` | Чем упорядочивать блоки в `experimental_layout_order`: `"model"` (обученная модель порядка блоков) или `"xycut"` (геометрическое правило). |
+| `reading_order` | `True` | Порядок чтения по layout-регионам: многоколоночная страница читается по колонкам (см. [ниже](#порядок-чтения)). `False` — просто сверху вниз. |
 | `tables` | `False` | Находить таблицы и раскладывать распознанные строки по ячейкам; в обычном тексте таблицы выводятся Markdown-таблицами. См. [Таблицы](#таблицы). |
 | `languages` | `None` | Язык(и) текста. `None` → русский/английский. Список кодов (напр. `["uk"]`) или `"auto"` включает многоязычную модель (ещё 12 языков на кириллице). См. [Языки](#языки). |
 | `detector` | `None` | Явное имя детектора. `None` → по умолчанию. |
@@ -672,11 +658,9 @@ pipe = OCRPipeline(Settings(
     gpu=False,            # True -> CUDA через ONNX Runtime (библиотеки CUDA: occular-ocr[gpu])
     orientation=False,    # определять поворот 0/90/180/270 и выпрямлять страницу
     deskew=True,          # автовыпрямление наклона
-    unwarp=None,          # UVDoc-расправление изгиба: "Shivin11/occular-uvdoc" или локальная папка с model.onnx
-    unwarp_gate=True,     # True -> применять, только если стало читаемее (x unwarp_margin); False -> всегда; число -> свой порог; callable -> свой критерий
-    unwarp_margin=1.05,   # порог-множитель читаемости для дефолтного гейта
+    unwarp=False,         # расправить изгиб: True -> только если читается лучше, "always" -> всегда
     lm=True,              # beam + языковая модель; False -> жадное (быстрее, без скачивания LM)
-    reading_order=False,  # порядок чтения для многоколоночных (опц. модель, см. ниже)
+    reading_order=True,   # порядок чтения по layout-регионам; False — сверху вниз
     tables=False,         # таблицы: у строк ключи table/cell, в тексте — Markdown-таблицы
     detector=None,        # None = детектор по умолчанию
     recognizer=None,      # None = svtr_lcnet; "svtr_t" = крупная модель
@@ -775,6 +759,7 @@ ocr document.png --out result.json
 | `--languages L` / `--lang L` | ru/en | Язык(и) текста через запятую (`uk`, `ru,kk`) или `auto`. |
 | `--orientation` | выкл | Определять и выпрямлять поворот страницы 0/90/180/270°. |
 | `--tables` | выкл | Находить таблицы: в тексте — Markdown-таблицы, в JSON — ячейки и структура. |
+| `--no-reading-order` | выкл | Печатать строки сверху вниз, а не в порядке чтения. |
 | `--model M` | `svtr_lcnet` | Архитектура распознавателя: `svtr_lcnet` или `svtr_t`. |
 | `--dpi N` | `300` | Разрешение рендеринга PDF. |
 | `--force-ocr` | выкл | OCR даже для векторных PDF. |
@@ -782,42 +767,37 @@ ocr document.png --out result.json
 | `--out FILE` | — | Сохранить результат одиночного файла в JSON. |
 | `--json` | выкл | Вывести полный JSON (с координатами) в stdout. |
 
-### Опционально: порядок чтения для многоколоночных страниц
+### Порядок чтения
 
-По умолчанию выключено. Модель нужно один раз скачать; без неё `reading_order=True` выдаёт ошибку с подсказкой, как это сделать.
+Включён по умолчанию (`reading_order=True`): строки выдаются в порядке чтения, многоколоночная
+страница читается по колонкам, а не поперёк. occular находит layout-регионы страницы
+(`LayoutDetector`), относит строку к текстовому региону, который покрывает её больше чем на 30 %
+(строка вне регионов — отдельный объект), и небольшая обученная модель (ONNX на CPU, ~5 мс на страницу)
+выстраивает регионы и такие строки по порядку; внутри региона строки идут сверху вниз. Веса (~55 МБ)
+качаются при первом использовании (или заранее — `download_reading_order()`). Строки и их текст от
+порядка не зависят; у каждой строки также есть `layout_region` (индекс или `None`) и `layout_label`.
 
-```python
-from occular import download_reading_order, OCRPipeline, Settings, model_info
+Замер на 755 английских страницах OmniDocBench с порядком, размеченным людьми (доля пар строк из
+разных блоков, идущих в правильном порядке):
 
-download_reading_order()                       # разовая докачка
-pipe = OCRPipeline(Settings(reading_order=True))
-
-model_info()                                   # показать, какие веса есть локально
-```
-
-### Экспериментально: порядок чтения по layout-регионам
-
-`experimental_layout_order=True` упорядочивает распознанные строки по layout-регионам той же
-страницы. Строка относится к текстовому региону, который покрывает её больше чем на 30 %; строка вне
-регионов становится отдельным объектом, а не уходит в конец. Затем регионы и такие строки
-выстраиваются по порядку, а внутри региона строки идут сверху вниз. По умолчанию порядок задаёт
-небольшая обученная модель порядка блоков (`layout_order_method="model"`, ONNX на CPU, ~5 мс на
-страницу, веса качаются при первом использовании); `layout_order_method="xycut"` — рекурсивный XY-cut.
-Строки и текст — ровно те же, что в обычном режиме; меняется только порядок. У каждой строки
-появляются `layout_region` (индекс или `None`) и `layout_label`.
+| | все страницы | одна колонка | две колонки | три колонки |
+|---|---|---|---|---|
+| `reading_order=True` (по умолчанию) | 92.0 % | 98.6 % | 84.3 % | 79.3 % |
+| `reading_order=False` (сверху вниз) | 85.4 % | 99.3 % | 72.8 % | 63.5 % |
 
 ```python
 from occular import OCRPipeline
 
-pipe = OCRPipeline(experimental_layout_order=True)
-for line in pipe.process_image("page.png"):
+pipe = OCRPipeline()                          # порядок чтения по layout-регионам
+pipe = OCRPipeline(reading_order=False)       # просто сверху вниз, без layout-моделей
+for line in OCRPipeline().process_image("page.png"):
     print(line["layout_label"], line["text"])
 ```
 
-Оба способа видят только рамки, метки и уверенность регионов, а не саму картинку; на отложенных
-страницах они сопоставимы по качеству, и ни один не заменяет `reading_order=True`. Если регион
-захватил две колонки, их строки читаются вместе сверху вниз; при пропущенных регионах порядок держится
-на отдельных строках. Несколько документов в одном кадре не различаются.
+Модель видит только рамки, метки и уверенность регионов, а не саму картинку. Если регион захватил две
+колонки, их строки читаются вместе сверху вниз; при пропущенных регионах порядок держится на отдельных
+строках. Несколько документов в одном кадре не различаются. Страницы PDF с текстовым слоем сохраняют
+порядок текстового слоя.
 
 > 📓 Всё вышеперечисленное есть и в исполняемом ноутбуке: **[`examples.ipynb`](examples.ipynb)**.
 
@@ -916,8 +896,8 @@ for t in tr(page):
 ```
 
 Необязательные шаги встраиваются в эту цепочку: поворот страницы (`orientation`) и расправление
-(`unwarp`) — до детекции; таблицы (`tables`) и порядок чтения (`reading_order`,
-`experimental_layout_order`) — после распознавания. Распознаватель — компактная SVTR + CTC модель,
+(`unwarp`) — до детекции; таблицы (`tables`) и порядок чтения (`reading_order`) — после
+распознавания. Распознаватель — компактная SVTR + CTC модель,
 экспортированная в ONNX; декодер — CTC prefix beam search с 4-gram русской языковой моделью. Стек
 декодирования — и языковая модель, и beam-поиск — по умолчанию **на чистом Python**, поэтому
 `pip install` проходит гладко на любой платформе; опциональный Rust-декодер даёт тот же результат быстрее.

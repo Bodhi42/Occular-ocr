@@ -14,12 +14,10 @@ from pathlib import Path
 
 # ⬇⬇⬇ ВСЕ МОДЕЛИ ЗДЕСЬ ⬇⬇⬇
 WEIGHTS_DIR = Path(__file__).parent / "weights"
-READING_ORDER_DIR = WEIGHTS_DIR / "reading_order"        # сюда качается layout-модель
 
-# Все веса моделей на HuggingFace (детектор, рекогнайзер, charset, reading_order/*).
+# Все веса моделей на HuggingFace (детектор, рекогнайзер, charset, layout, таблицы).
 # Локальный файл в weights/ (если есть) имеет приоритет; иначе качается с HF в кэш.
 WEIGHTS_HF_REPO = "Shivin11/occular-ocr"
-READING_ORDER_HF_REPO = WEIGHTS_HF_REPO                  # reading_order/encoder.onnx, decoder.onnx
 # Закрепление версии весов для воспроизводимости: HF commit SHA релиза. None = ветка по умолчанию
 # (последняя ревизия). Для production выставьте конкретный commit, чтобы веса не менялись со временем.
 WEIGHTS_REVISION = None
@@ -42,6 +40,22 @@ def ensure_weight(rel_path: str) -> str:
             f"pip install huggingface_hub  (or put the file at {local})"
         )
     return hf_hub_download(WEIGHTS_HF_REPO, rel_path, revision=WEIGHTS_REVISION)
+
+
+def locate_weight(rel_path: str, repo: str = None) -> "Path | None":
+    """Где файл уже лежит, без сети: weights/, затем кэш HF (для LM — ещё OCCULAR_LM_DIR). None — не скачан."""
+    repo = repo or WEIGHTS_HF_REPO
+    if repo == WEIGHTS_HF_REPO and (WEIGHTS_DIR / rel_path).exists():
+        return WEIGHTS_DIR / rel_path
+    if repo == LM_HF_REPO and _os.environ.get("OCCULAR_LM_DIR"):
+        p = Path(_os.environ["OCCULAR_LM_DIR"]) / rel_path
+        return p if p.exists() else None
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:
+        return None
+    hit = try_to_load_from_cache(repo, rel_path, revision=WEIGHTS_REVISION if repo == WEIGHTS_HF_REPO else None)
+    return Path(hit) if isinstance(hit, str) and Path(hit).exists() else None
 
 
 def ensure_cyr_lm(lang: str) -> tuple:
@@ -121,10 +135,10 @@ MODELS = {
                 "for ocr(languages=[...]); local in weights/ or from Hugging Face",
         "required": False,
     },
-    "Layout regions D-FINE-S (optional)": {
+    "Layout regions + reading order (on by default)": {
         "files": ["layout_dfine_s144k_fp32.onnx", "layout_order_blocks_fp32.onnx"],
-        "desc": "Page regions (box, score, one of 18 labels) — for LayoutDetector — and the block-order model "
-                "(3.3M) for the experimental reading order; local in weights/ or from Hugging Face",
+        "desc": "Page regions D-FINE-S (box, score, one of 18 labels; also LayoutDetector) and the block-order "
+                "model (3.3M) — for reading_order (on by default); local in weights/ or from Hugging Face",
         "required": False,
     },
     "Page orientation (optional)": {
@@ -151,13 +165,9 @@ MODELS = {
                 "read in strips) — for tables=True and TableRecognizer; local in weights/ or from Hugging Face",
         "required": False,
     },
-    "Reading order / layout (optional)": {
-        "files": ["reading_order/encoder.onnx", "reading_order/decoder.onnx"],
-        "desc": f"AR layout, ONNX FP32 — downloaded from Hugging Face ({READING_ORDER_HF_REPO}), off by default",
-        "required": False,
-    },
     "Beam-CTC language model (on by default)": {
-        "files": [],   # в кэше HF, не в weights/; см. decoder_lm._resolve_lm_files
+        "files": [NPZ_NAME, UNI_NAME],   # в кэше HF (или OCCULAR_LM_DIR), не в weights/
+        "repo": LM_HF_REPO,
         "desc": f"n-gram LM (compact_lm.npz ~270 MB + unigrams.txt) — pure Python, no C dependencies "
                 f"(optional native decoder: occular-decode); downloaded from Hugging Face ({LM_HF_REPO}) "
                 f"on first run, or from OCCULAR_LM_DIR. Turn off: OCRPipeline(lm=False)",
@@ -168,12 +178,14 @@ MODELS = {
 
 def model_info():
     """Показать все модели: где лежат, размер, статус. Для чайников."""
-    print(f"\nOccular-OCR models are stored in:\n  {WEIGHTS_DIR}\n")
+    print(f"\nOccular-OCR models are looked up in:\n  {WEIGHTS_DIR}\n  then the Hugging Face cache "
+          f"(HF_HOME, downloaded on first use)\n")
     print(f"{'MODEL':48} {'SIZE':>8}  STATUS")
     print("-" * 78)
     for name, m in MODELS.items():
-        present = all((WEIGHTS_DIR / f).exists() for f in m["files"])
-        total = sum((WEIGHTS_DIR / f).stat().st_size for f in m["files"] if (WEIGHTS_DIR / f).exists())
+        found = [locate_weight(f, m.get("repo", WEIGHTS_HF_REPO)) for f in m["files"]]
+        present = all(found)
+        total = sum(f.stat().st_size for f in found) if present else 0
         size = f"{total/1e6:.0f} MB" if total else "—"
         if present:
             status = "✅ present"
@@ -186,13 +198,13 @@ def model_info():
         for f in m["files"]:
             print(f"    └─ {f}")
     print("-" * 78)
-    print("Reading order is off by default. Turn it on: OCRPipeline(reading_order=True)")
-    print("Download the reading-order model:  from occular import download_reading_order; download_reading_order()\n")
+    print("Optional models are downloaded on first use. Reading order is on by default; turn it off: "
+          "OCRPipeline(reading_order=False)\n")
 
 
 def layout_ready() -> bool:
-    """Лежат ли layout-модель (D-FINE-S) и модель порядка блоков локально в weights/? (Иначе скачаются при первом использовании.)"""
-    return all((WEIGHTS_DIR / f).exists() for f in ("layout_dfine_s144k_fp32.onnx", "layout_order_blocks_fp32.onnx"))
+    """Есть ли layout-модель (D-FINE-S) и модель порядка блоков — в weights/ или в кэше HF? (Иначе скачаются при первом использовании.)"""
+    return all(locate_weight(f) for f in ("layout_dfine_s144k_fp32.onnx", "layout_order_blocks_fp32.onnx"))
 
 
 def download_layout() -> str:
@@ -203,26 +215,11 @@ def download_layout() -> str:
 
 
 def reading_order_ready() -> bool:
-    """Скачана ли layout-модель (порядок чтения)?"""
-    return (READING_ORDER_DIR / "encoder.onnx").exists() and (READING_ORDER_DIR / "decoder.onnx").exists()
+    """Есть ли модели порядка чтения (layout + порядок блоков) локально или в кэше HF? То же, что layout_ready()."""
+    return layout_ready()
 
 
-def download_reading_order():
-    """Скачать опциональную модель порядка чтения (layout) с HuggingFace в occular/weights/reading_order/."""
-    if reading_order_ready():
-        print(f"✅ Already downloaded: {READING_ORDER_DIR}")
-        return str(READING_ORDER_DIR)
-    READING_ORDER_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError:
-        raise RuntimeError("huggingface_hub is required: pip install huggingface_hub")
-    import shutil
-    print(f"Downloading the reading-order model from Hugging Face ({READING_ORDER_HF_REPO}) to {READING_ORDER_DIR} ...")
-    # в репо файлы плоские (reading_order_*.onnx) — раскладываем в weights/reading_order/{encoder,decoder}.onnx
-    for repo_name, local_name in [("reading_order_encoder.onnx", "encoder.onnx"),
-                                  ("reading_order_decoder.onnx", "decoder.onnx")]:
-        p = hf_hub_download(READING_ORDER_HF_REPO, repo_name, revision=WEIGHTS_REVISION)
-        shutil.copy(p, READING_ORDER_DIR / local_name)
-    print(f"✅ Done: {READING_ORDER_DIR}")
-    return str(READING_ORDER_DIR)
+def download_reading_order() -> str:
+    """Заранее скачать модели порядка чтения (layout + порядок блоков). То же, что download_layout();
+    без этого вызова они скачиваются при первом использовании."""
+    return download_layout()

@@ -115,6 +115,55 @@ def test_language_routing_selects_recognizer():
     assert name == "multilingual" and kw == {"languages": ["uk"]}
 
 
+def test_unknown_language_rejected():
+    """Неизвестный код языка — понятная ошибка, а не молчаливый уход в кир-модель; регистр не важен."""
+    from occular import _normalize_languages
+    with pytest.raises(ValueError, match="Unsupported language"):
+        _normalize_languages(["ru", "xx"])
+    with pytest.raises(ValueError, match="Unsupported language"):
+        _normalize_languages("xx")
+    assert _normalize_languages(["UK"]) == ("multilingual", {"languages": ["uk"]})
+
+
+def test_registry_cache_keyed_by_all_args():
+    """Экземпляр переиспользуется только при тех же аргументах: раньше ключ (name, threads, gpu, lm)
+    отдавал распознаватель, созданный для других languages/arch."""
+    made = []
+
+    class Fake:
+        def __init__(self, **kw):
+            made.append(kw)
+
+    Registry.register_recognizer("_fake_test", Fake)
+    try:
+        a = Registry.get_recognizer("_fake_test", languages=["uk"], num_threads=2)
+        b = Registry.get_recognizer("_fake_test", languages=["kk"], num_threads=2)
+        c = Registry.get_recognizer("_fake_test", languages=["uk"], num_threads=2)
+        d = Registry.get_recognizer("_fake_test", arch="svtr_t", num_threads=2)
+        assert a is not b and a is c and d is not a and len(made) == 3
+    finally:
+        Registry._recognizers.pop("_fake_test", None)
+        for k in [k for k in Registry._recognizer_cache if k[0] == "_fake_test"]:
+            del Registry._recognizer_cache[k]
+
+
+def test_locate_weight_sees_hf_cache(tmp_path, monkeypatch):
+    """model_info/layout_ready видят веса в кэше HF, а не только в weights/ (раньше обязательные
+    модели в кэше показывались как MISSING)."""
+    hf = pytest.importorskip("huggingface_hub")
+    import occular.model_files as mf
+    monkeypatch.setattr(mf, "WEIGHTS_DIR", tmp_path / "weights")
+    cached = tmp_path / "cached.onnx"
+    cached.write_bytes(b"x")
+    monkeypatch.setattr(hf, "try_to_load_from_cache",
+                        lambda repo, f, revision=None: str(cached) if f == "a.onnx" else None)
+    assert mf.locate_weight("a.onnx") == cached
+    assert mf.locate_weight("b.onnx") is None
+    (tmp_path / "weights").mkdir()
+    (tmp_path / "weights" / "b.onnx").write_bytes(b"y")
+    assert mf.locate_weight("b.onnx") == tmp_path / "weights" / "b.onnx"
+
+
 def test_multilingual_recognizer_langs():
     """Роутер принимает языки и хранит их (без загрузки весов до вызова recognize)."""
     from occular.multilingual import MultilingualRecognizer
@@ -122,3 +171,38 @@ def test_multilingual_recognizer_langs():
     assert rec.languages == ["uk"]
     rec_auto = MultilingualRecognizer(languages=None)
     assert rec_auto.languages is None
+
+
+def test_plain_text_keeps_reading_order(monkeypatch, tmp_path):
+    """ocr() и CLI печатают строки в порядке конвейера (порядке чтения), а не пересортировывают сверху вниз."""
+    import occular
+    from occular import cli
+    lines = [{"quad": [[0, 50], [9, 50], [9, 60], [0, 60]], "text": "first"},     # ниже на странице, но первая
+             {"quad": [[0, 10], [9, 10], [9, 20], [0, 20]], "text": "second"}]
+
+    class Fake:
+        def process_image(self, path):
+            return list(lines)
+
+    monkeypatch.setattr(occular, "_build_pipeline", lambda *a, **k: Fake())
+    img = tmp_path / "x.png"
+    img.write_bytes(b"")
+    assert occular.ocr(str(img)) == "first\nsecond"
+    assert cli._plain_text(Fake(), img, None) == "first\nsecond"
+
+
+def test_unwarp_single_setting():
+    """unwarp: False — выкл, True — с проверкой читаемости, "always" — без; unwarp_gate/unwarp_margin убраны."""
+    from occular.pipeline import _unwarp_mode, UNWARP_MODEL
+    from occular import Settings, OCRPipeline
+    assert _unwarp_mode(False) == (None, False) and _unwarp_mode(None) == (None, False)
+    assert _unwarp_mode(True) == (UNWARP_MODEL, False)
+    assert _unwarp_mode("always") == (UNWARP_MODEL, True)
+    assert _unwarp_mode("my/uvdoc") == ("my/uvdoc", False)
+    with pytest.raises(ValueError):
+        _unwarp_mode(1.1)
+    assert Settings().unwarp is False
+    for gone in ("unwarp_gate", "unwarp_margin"):
+        assert not hasattr(Settings(), gone)
+        with pytest.raises(TypeError):
+            OCRPipeline(**{gone: True})

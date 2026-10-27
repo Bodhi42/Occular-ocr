@@ -16,7 +16,7 @@ Occular OCR Package
     ocr document.pdf --workers 4
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 import os
 from typing import Union, List, Dict, Optional
@@ -74,10 +74,15 @@ def _normalize_languages(languages, arch=None):
         if languages.lower() == "auto":
             return "multilingual", {"languages": None, **extra}   # авто-роутинг среди всех 14 языков
         languages = [languages]
-    return "multilingual", {"languages": list(languages), **extra}
+    codes = [str(c).strip().lower() for c in languages]
+    unknown = [c for c in codes if c not in ALL_LANGS]
+    if unknown:   # иначе неизвестный код молча уводил все строки в кир-модель без LM
+        raise ValueError(f"Unsupported language code(s): {', '.join(unknown)}. "
+                         f"Supported: {', '.join(sorted(ALL_LANGS))}, or 'auto'.")
+    return "multilingual", {"languages": codes, **extra}
 
 
-def _build_pipeline(deskew, lm, num_threads, gpu, reading_order=False, languages=None,
+def _build_pipeline(deskew, lm, num_threads, gpu, reading_order=True, languages=None,
                     orientation=False, arch=None, tables=False):
     """Собрать конвейер. languages=None → русский распознаватель (ru/en) по умолчанию;
     список языков или 'auto' → мультиязычный роутер (русская + 12 кир-языков)."""
@@ -92,7 +97,7 @@ def _build_pipeline(deskew, lm, num_threads, gpu, reading_order=False, languages
 def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         num_threads: Optional[int] = None, gpu: bool = False,
         languages=None, orientation: bool = False, recognizer: Optional[str] = None,
-        tables: bool = False) -> Union[str, List[str]]:
+        tables: bool = False, reading_order: bool = True) -> Union[str, List[str]]:
     """
     Распознать текст из изображения или PDF.
 
@@ -105,6 +110,7 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         orientation: определять поворот страницы (0/90/180/270°) и выпрямлять (по умолчанию False)
         recognizer: архитектура распознавателя — 'svtr_lcnet' (по умолчанию) или 'svtr_t' (крупная)
         tables: находить таблицы; в тексте они выводятся Markdown-таблицами на своём месте (по умолчанию False)
+        reading_order: порядок чтения по layout-регионам (по умолчанию True; False = просто сверху вниз)
         languages: язык(и) текста. None (по умолчанию) — русская модель (ru/en). Список кодов —
             мультиязычный роутер: один кир-язык (напр. ['uk']) читается им, несколько (напр.
             ['ru','kk','uk']) — построчным определением языка. 'auto' — авто среди всех 14.
@@ -122,24 +128,23 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         Привет мир
     """
     from .tables import compose_text
-    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages,
+    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, reading_order=reading_order, languages=languages,
                                orientation=orientation, arch=recognizer, tables=tables)
 
     path = Path(file_path)
     if path.suffix.lower() == '.pdf':
         results = pipeline.process_pdf(file_path)
-        # Текст по страницам, строки сверху вниз (таблицы — Markdown на месте первой строки)
-        return [compose_text(sorted(page["results"], key=lambda r: r["quad"][0][1]), page.get("tables"))
-                for page in results]
+        # Текст по страницам, строки в порядке конвейера — порядке чтения (таблицы — Markdown на месте первой строки)
+        return [compose_text(page["results"], page.get("tables")) for page in results]
     else:
         results = pipeline.process_image(file_path)
-        return compose_text(sorted(results, key=lambda r: r["quad"][0][1]), getattr(results, "tables", None))
+        return compose_text(results, getattr(results, "tables", None))
 
 
 def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
                  num_threads: Optional[int] = None, gpu: bool = False,
                  languages=None, orientation: bool = False, recognizer: Optional[str] = None,
-                 tables: bool = False) -> List[Dict]:
+                 tables: bool = False, reading_order: bool = True) -> List[Dict]:
     """
     Распознать текст с полной информацией (координаты, confidence).
 
@@ -155,6 +160,7 @@ def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
             'auto' — мультиязычный роутер (русская + 12 кир-языков).
         tables: находить таблицы (по умолчанию False): строкам в таблице добавляются ключи 'table' и
             'cell', структура таблиц — в атрибуте .tables результата (для PDF — ключ 'tables' страницы)
+        reading_order: порядок чтения по layout-регионам (по умолчанию True; False = просто сверху вниз)
 
     Returns:
         Список словарей {"quad": [...], "text": str, "confidence": float}
@@ -165,7 +171,7 @@ def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
         >>> for r in results:
         ...     print(f"{r['text']} ({r['confidence']:.2f})")
     """
-    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, languages=languages,
+    pipeline = _build_pipeline(deskew, lm, num_threads, gpu, reading_order=reading_order, languages=languages,
                                orientation=orientation, arch=recognizer, tables=tables)
 
     path = Path(file_path)
@@ -196,7 +202,7 @@ class OCRPipeline:
         settings: Optional[Settings] = None,
         *,
         deskew: bool = True,
-        reading_order: bool = False,
+        reading_order: bool = True,
         lm: bool = True,
         num_threads: Optional[int] = None,
         gpu: bool = False,
@@ -204,11 +210,7 @@ class OCRPipeline:
         recognizer: Optional[str] = None,
         languages=None,
         orientation: bool = False,
-        unwarp=None,
-        unwarp_gate=True,
-        unwarp_margin: float = 1.05,
-        experimental_layout_order: bool = False,
-        layout_order_method: str = "model",
+        unwarp: Union[bool, str] = False,
         tables: bool = False
     ):
         _ensure_registered()
@@ -218,20 +220,9 @@ class OCRPipeline:
             settings = Settings(deskew=deskew, reading_order=reading_order, lm=lm,
                                 num_threads=num_threads, gpu=gpu, orientation=orientation,
                                 detector=detector, recognizer=recognizer, languages=languages,
-                                unwarp=unwarp, unwarp_gate=unwarp_gate, unwarp_margin=unwarp_margin,
-                                experimental_layout_order=experimental_layout_order,
-                                layout_order_method=layout_order_method, tables=tables)
+                                unwarp=unwarp, tables=tables)
         self.settings = settings
         s = settings
-
-        # Порядок чтения (layout) — опционально, ВЫКЛ по умолчанию. Модель качается с HuggingFace.
-        self.reading_order = s.reading_order
-        if s.reading_order and not reading_order_ready():
-            raise RuntimeError(
-                "reading_order=True, but the reading-order model is not downloaded.\n"
-                "Download it:  from occular import download_reading_order; download_reading_order()\n"
-                "Or check the status:  from occular import model_info; model_info()"
-            )
 
         detector = s.detector or "dbnet-onnx"
         # s.recognizer — обычно АРХИТЕКТУРА ('svtr_lcnet' | 'svtr_t'); имя из реестра
@@ -253,10 +244,6 @@ class OCRPipeline:
             num_threads=s.num_threads,
             gpu=s.gpu,
             unwarp=s.unwarp,
-            unwarp_gate=s.unwarp_gate,
-            unwarp_margin=s.unwarp_margin,
-            experimental_layout_order=s.experimental_layout_order,
-            layout_order_method=s.layout_order_method,
             tables=s.tables
         )
 
@@ -330,7 +317,7 @@ __all__ = [
     "Settings",
     # Таблицы (детекция + структура)
     "TableRecognizer",
-    # Модели: где лежат и как скачать порядок чтения (для чайников)
+    # Модели: где лежат и как скачать заранее
     "model_info",
     "download_reading_order",
     "reading_order_ready",

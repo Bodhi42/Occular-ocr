@@ -11,6 +11,24 @@ import cv2
 from .registry import Registry
 
 
+UNWARP_MODEL = "Shivin11/occular-uvdoc"    # веса UVDoc на Hugging Face
+UNWARP_MARGIN = 1.05      # дьюарп берётся, если читаемость (Σ len·conf строк) выше в столько раз: на
+                          # плоских сканах дьюарп без проверки вредит (+0.006 CER), с ней — в плюс
+                          # (−0.0018 CER, ~3 % срабатываний, лучше/хуже ≈ 3:1)
+
+
+def _unwarp_mode(unwarp):
+    """unwarp → (model_id или None, без проверки?). False/None — выкл, True — с проверкой,
+    "always" — всегда; другая строка — свой model_id/папка, с проверкой."""
+    if unwarp is None or unwarp is False:
+        return None, False
+    if unwarp is True:
+        return UNWARP_MODEL, False
+    if isinstance(unwarp, str):
+        return (UNWARP_MODEL, True) if unwarp == "always" else (unwarp, False)
+    raise ValueError(f'unwarp must be False, True or "always", not {unwarp!r}')
+
+
 def pymupdf():
     """PyMuPDF под новым именем модуля (с 1.24.3); `import fitz` в свежих версиях печатает
     предупреждение об устаревании — в т.ч. в каждом воркере."""
@@ -53,11 +71,10 @@ class OCRPipeline:
 
     def __init__(self, detector_name: str = None, recognizer_name: str = None,
                  detector_kwargs: dict = None, recognizer_kwargs: dict = None,
-                 deskew: bool = True, reading_order: bool = False, lm: bool = True,
+                 deskew: bool = True, reading_order: bool = True, lm: bool = True,
                  num_threads: int = None, gpu: bool = False, orientation: bool = False,
-                 oriented_lines: bool = None, unwarp=None, unwarp_gate=True,
-                 unwarp_margin: float = 1.05, experimental_layout_order: bool = False,
-                 layout_order_method: str = "model", tables: bool = False):
+                 oriented_lines: bool = None, unwarp: Union[bool, str] = False,
+                 tables: bool = False):
         """
         Args:
             detector_name: имя детектора (по умолчанию 'dbnet-onnx')
@@ -73,50 +90,30 @@ class OCRPipeline:
                 чтобы принудительно оторвать per-crop ориентацию от deskew (обратная совместимость).
             num_threads: потоков ONNX Runtime на страницу (None = min(доступные, 8))
             gpu: исполнять на GPU/CUDA (ONNX Runtime; библиотеки CUDA — pip install "occular-ocr[gpu]"; иначе фолбэк на CPU)
-            unwarp: опц. нейросетевое расправление изгиба (UVDoc). None = ВЫКЛ (по умолч).
-                Строка = HF model_id/локальная папка с весами (ленивая загрузка), либо готовый
-                UVDocUnwarper (ONNX). Тяжёлый препроцесс для фото/смятых страниц.
-            unwarp_gate: чем решать, применять ли дьюарп (когда unwarp включён). Варианты:
-                • True (по умолч) — readability self-gate с порогом unwarp_margin: берём дьюарп ТОЛЬКО
-                  если он повышает читаемость (Σ len·conf строк) минимум в unwarp_margin раз. На нашем
-                  домене (мостовые плоские сканы) blanket-дьюарп вредит (+0.006 CER), а этот гейт
-                  разворачивает в плюс (−0.0018 CER, на сработавших медиана ≈ −0.04); стоит доп.
-                  прогона OCR на кандидате.
-                • False/None — blanket: применять unwarp всегда (дешевле на 1 OCR, но вредит плоским).
-                • число (напр. 1.10) — тот же readability-гейт, но со своим порогом-margin (перебивает
-                  unwarp_margin). Больше порог → реже срабатывает, но чище выигрыш.
-                • callable(res_orig, res_dew) -> bool — свой гейт: True = взять дьюарп. res_* это списки
-                  результатов OCR ({text, confidence, quad}) для оригинала и дьюарпа.
-            experimental_layout_order: ЭКСПЕРИМЕНТАЛЬНЫЙ порядок чтения по layout-регионам (D-FINE-S;
-                строки без региона — отдельными объектами). ВЫКЛ по умолч. Не совместим с reading_order=True.
-                Строки и их распознавание те же, что в обычном режиме; меняется только порядок, к строкам
-                добавляются ключи layout_region / layout_label. Ничего не удаляется и не пропускается.
-            layout_order_method: чем упорядочивать блоки в режиме experimental_layout_order:
-                'model' (по умолч.) — обученная модель порядка блоков (ONNX, ~5 мс/стр на CPU);
-                'xycut' — геометрическое правило XY-cut. Объекты и правило «внутри блока сверху вниз»
-                у обоих одинаковые. Модель качается с HuggingFace при первом использовании.
+            unwarp: нейросетевое расправление изгиба (UVDoc, ONNX) для фото и изогнутых страниц.
+                False (по умолч.) — выкл. True — расправлять, только если так строки читаются лучше
+                (Σ len·conf выше минимум в UNWARP_MARGIN раз; стоит второго прогона OCR, ~×2 время).
+                "always" — расправлять всегда, без проверки (вредит плоским страницам). Модель качается
+                с Hugging Face при первом использовании. Другая строка — свой model_id/папка с model.onnx
+                (с проверкой). Замер на 213 сканах/документах: время ×2.06, текст изменился на 7 стр.
+            reading_order: порядок чтения по layout-регионам (ВКЛ по умолч.): LayoutDetector находит регионы,
+                строка относится к текстовому региону, покрывающему её >30 % (иначе — отдельный объект),
+                обученная модель порядка блоков (ONNX, ~5 мс/стр на CPU) упорядочивает объекты, внутри
+                региона — сверху вниз. Замер (755 стр. OmniDocBench, человеческий порядок): верных пар
+                строк 85.4 % (сверху вниз) → 92.0 %; CER на 947 стр. 0.341 → 0.225. Строки и текст те же, меняется только порядок; к
+                строкам добавляются layout_region / layout_label. False = просто сверху вниз.
             tables: искать таблицы и раскладывать распознанные строки по их ячейкам. ВЫКЛ по умолч.
                 Строкам внутри таблицы добавляются ключи 'table' и 'cell'; структура таблиц — в .tables
                 у результата process_image и в ключе 'tables' у страницы PDF. Строку, которую детектор
                 склеил через границу ячеек, делим по пробелу у границы (ключ 'split'); текст кусков —
                 части исходного текста строки.
-            unwarp_margin: порог-множитель для дефолтного readability-гейта (unwarp_gate=True).
-                Дьюарп берётся если read(дьюарп) > read(оригинал)·unwarp_margin. По умолч 1.05
-                (осторожно: ~3% срабатываний, лучшее соотношение луч/хуж ≈ 3:1).
         """
         # аргументы конструктора как есть — процессы-воркеры (occular.parallel) строят по ним свой конвейер
         self._init_kwargs = dict(
             detector_name=detector_name, recognizer_name=recognizer_name,
             detector_kwargs=dict(detector_kwargs or {}), recognizer_kwargs=dict(recognizer_kwargs or {}),
             deskew=deskew, reading_order=reading_order, lm=lm, num_threads=num_threads, gpu=gpu,
-            orientation=orientation, oriented_lines=oriented_lines, unwarp=unwarp, unwarp_gate=unwarp_gate,
-            unwarp_margin=unwarp_margin, experimental_layout_order=experimental_layout_order,
-            layout_order_method=layout_order_method, tables=tables)
-        if reading_order and experimental_layout_order:
-            raise ValueError("reading_order=True and experimental_layout_order=True are mutually exclusive: "
-                             "choose one reading-order mode.")
-        if layout_order_method not in ("model", "xycut"):
-            raise ValueError(f"layout_order_method must be 'model' or 'xycut', not {layout_order_method!r}")
+            orientation=orientation, oriented_lines=oriented_lines, unwarp=unwarp, tables=tables)
         detector_kwargs = detector_kwargs or {}
         recognizer_kwargs = recognizer_kwargs or {}
         self.gpu = bool(gpu)
@@ -150,35 +147,25 @@ class OCRPipeline:
         # Требует detect_regions() у детектора (dbnet-onnx умеет); иначе тихий фолбэк на detect().
         _ol = self.deskew if oriented_lines is None else oriented_lines
         self.oriented_lines = bool(_ol) and hasattr(self.detector, "detect_regions")
-        self.reading_order = reading_order   # порядок чтения через layout-модель (по умолчанию ВЫКЛ)
-        self._ro = None
-        # ЭКСПЕРИМЕНТ: порядок по регионам LayoutDetector + XY-cut. Модель создаётся сразу (не лениво),
-        # чтобы параллельные потоки PDF не гонялись за инициализацией.
-        self.experimental_layout_order = bool(experimental_layout_order)
-        self.layout_order_method = layout_order_method
+        # Порядок чтения по регионам LayoutDetector + обученная модель порядка блоков (по умолчанию).
+        # Модели создаются сразу (не лениво), чтобы параллельные потоки PDF не гонялись за инициализацией.
+        self.reading_order = bool(reading_order)
         self._layout = None
         self._block_order = None
-        if self.experimental_layout_order:
+        if self.reading_order:
             from .layout import LayoutDetector
+            from .layout_order_model import BlockOrderModel
             self._layout = LayoutDetector(num_threads=self.num_threads, gpu=self.gpu)
-            if layout_order_method == "model":
-                from .layout_order_model import BlockOrderModel
-                self._block_order = BlockOrderModel(num_threads=self.num_threads, gpu=self.gpu)
+            self._block_order = BlockOrderModel(num_threads=self.num_threads, gpu=self.gpu)
         # Таблицы: модели создаются сразу (как layout) — параллельные потоки PDF их делят
         self.tables = bool(tables)
         self._tables = None
         if self.tables:
             from .tables import TableRecognizer
             self._tables = TableRecognizer(num_threads=self.num_threads, gpu=self.gpu)
-        if reading_order:
-            from .reading_order import ReadingOrderModel
-            self._ro = ReadingOrderModel(num_threads=self.num_threads, gpu=self.gpu)
-        # UVDoc unwarp: None = выкл; строка = ленивый model_id/папка; иначе готовый инстанс.
-        self._unwarp_arg = unwarp
-        self._unwarp = unwarp if (unwarp is not None and not isinstance(unwarp, str)) else None
-        # True=readability×margin, False/None=blanket, число=readability×это, callable=свой гейт
-        self.unwarp_gate = unwarp_gate
-        self.unwarp_margin = float(unwarp_margin)
+        # UVDoc unwarp: модель грузится лениво при первой странице
+        self._unwarp_model, self._unwarp_always = _unwarp_mode(unwarp)
+        self._unwarp = None
 
     def process_image(self, image_path: str) -> List[Dict]:
         """
@@ -207,15 +194,14 @@ class OCRPipeline:
                 self._orient = OrientationDetector(num_threads=self.num_threads, gpu=self.gpu)
             image, _applied, _conf = self._orient.correct(image)
 
-        # UVDoc unwarp (опц.): расправить изгиб перед OCR. С self-gate — берём оригинал ИЛИ дьюарп
-        # по читаемости (не хуже оригинала на плоских). Без гейта — blanket-дьюарп.
-        if self._unwarp_arg is not None:
+        # UVDoc unwarp (опц.): расправить изгиб перед OCR. С проверкой — берём оригинал ИЛИ дьюарп
+        # по читаемости (не хуже оригинала на плоских); "always" — дьюарп без проверки.
+        if self._unwarp_model is not None:
             self._ensure_unwarp()
-            # False/None = blanket: применяем дьюарп без гейта (1 OCR)
-            if not self.unwarp_gate:
+            if self._unwarp_always:
                 image = self._unwarp.unwarp(image)
                 return self._with_tables(image, self._ocr_page(image))
-            # гейт: OCR оригинала vs дьюарпа, решаем через _use_dewarp
+            # проверка: OCR оригинала vs дьюарпа
             res_orig = self._ocr_page(image)
             try:
                 dew = self._unwarp.unwarp(image)
@@ -247,51 +233,40 @@ class OCRPipeline:
         return PageResult(lines, tables=tables)
 
     def _use_dewarp(self, res_orig: List[Dict], res_dew: List[Dict]) -> bool:
-        """Решение гейта: брать ли дьюарп. callable → свой предикат; число → readability×это;
-        True → readability×self.unwarp_margin (дефолт 1.05)."""
-        gate = self.unwarp_gate
-        if callable(gate):
-            return bool(gate(res_orig, res_dew))
-        margin = self.unwarp_margin if gate is True else float(gate)
-        return self._readability(res_dew) > self._readability(res_orig) * margin
+        """Брать ли дьюарп: читаемость выше минимум в UNWARP_MARGIN раз."""
+        return self._readability(res_dew) > self._readability(res_orig) * UNWARP_MARGIN
 
     def _ocr_page(self, image: np.ndarray) -> List[Dict]:
-        """OCR уже препроцессенной страницы: reading_order по регионам или обычный проход."""
-        if self.reading_order and self._ro is not None:
-            return self._ocr_by_regions(image)
-        if self.experimental_layout_order and self._layout is not None:
+        """OCR уже препроцессенной страницы: порядок чтения по регионам или просто сверху вниз."""
+        if self.reading_order:
             return self._ocr_layout_order(image)
         return self._ocr_whole(image)
 
     def _ocr_layout_order(self, image: np.ndarray) -> List[Dict]:
-        """ЭКСПЕРИМЕНТ: обычный OCR всей страницы (те же строки и текст), затем порядок по layout-регионам
+        """Обычный OCR всей страницы (те же строки и текст), затем порядок чтения по layout-регионам
         ТОЙ ЖЕ картинки (после deskew/orientation/unwarp) — координаты строк и регионов совпадают."""
         import logging
-        from .layout_order import order_lines
         results = self._ocr_whole(image)
         layout = self._layout.detect(image)
         boxes = []
         for r in results:
             q = np.asarray(r["quad"], dtype=float)
             boxes.append([q[:, 0].min(), q[:, 1].min(), q[:, 0].max(), q[:, 1].max()])
-        if self._block_order is not None:
-            order, line_region, stats = self._block_order.order_lines(boxes, layout.regions,
-                                                                      layout.width, layout.height)
-        else:
-            order, line_region, stats = order_lines(boxes, layout.regions)
+        order, line_region, stats = self._block_order.order_lines(boxes, layout.regions,
+                                                                  layout.width, layout.height)
         for r, ri in zip(results, line_region):
             r["layout_region"] = int(ri) if ri >= 0 else None
             r["layout_label"] = layout.regions[ri].label if ri >= 0 else None
         logging.getLogger("occular.layout").info(
-            "layout_order[%s]: lines=%d regions=%d coverage_80=%.3f unassigned_30=%.3f",
-            self.layout_order_method, stats["lines"], stats["regions"], stats["coverage_80"], stats["unassigned_30"])
+            "reading_order: lines=%d regions=%d coverage_80=%.3f unassigned_30=%.3f",
+            stats["lines"], stats["regions"], stats["coverage_80"], stats["unassigned_30"])
         return [results[i] for i in order]
 
     def _ensure_unwarp(self):
-        """Ленивая инициализация UVDocUnwarper из model_id-строки при первом использовании."""
-        if self._unwarp is None and isinstance(self._unwarp_arg, str):
+        """Ленивая инициализация UVDocUnwarper при первом использовании."""
+        if self._unwarp is None:
             from .unwarp_uvdoc import UVDocUnwarper
-            self._unwarp = UVDocUnwarper(model_id=self._unwarp_arg, gpu=self.gpu)
+            self._unwarp = UVDocUnwarper(model_id=self._unwarp_model, gpu=self.gpu)
 
     @staticmethod
     def _readability(results: List[Dict]) -> float:
@@ -333,47 +308,6 @@ class OCRPipeline:
         # сортировка сверху-вниз по верхней точке региона (как в осевом пути)
         results.sort(key=lambda r: min(p[1] for p in r["quad"]))
         return results
-
-    def _ocr_by_regions(self, image: np.ndarray) -> List[Dict]:
-        """reading_order (вариант C): детект ВСЕЙ страницы ОДИН раз (полнота), затем строки
-        группируются по регионам layout В ПОРЯДКЕ ЧТЕНИЯ. Ничего не теряется, порядок правильный.
-        Строки вне всех регионов (номера страниц, поля) — в конец, по Y."""
-        # 1) обычный OCR всей страницы — все строки
-        quads = self.detector.detect(image)
-        texts = self.recognizer.recognize(image, quads)
-        lines = [
-            {"quad": q.tolist(), "text": t, "confidence": float(c)}
-            for q, (t, c) in zip(quads, texts)
-        ]
-        if not lines:
-            return lines
-        # 2) регионы в порядке чтения
-        regions = self._ro.regions_in_order(image)
-        if not regions:
-            lines.sort(key=lambda r: r["quad"][0][1])            # layout пусто -> просто по Y
-            return lines
-
-        # доля строки, покрытая регионом
-        def covered(lb, rb):
-            x1 = max(lb[0], rb[0]); y1 = max(lb[1], rb[1])
-            x2 = min(lb[2], rb[2]); y2 = min(lb[3], rb[3])
-            inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-            return inter / max(1e-6, (lb[2] - lb[0]) * (lb[3] - lb[1]))
-
-        # 3) назначить строку региону (макс. покрытие ≥30%), непривязанные -> индекс len(regions)
-        keyed = []
-        for ln in lines:
-            q = np.asarray(ln["quad"], np.float32)
-            lb = (float(q[:, 0].min()), float(q[:, 1].min()), float(q[:, 0].max()), float(q[:, 1].max()))
-            best, best_ov = len(regions), 0.3
-            for i, rb in enumerate(regions):
-                ov = covered(lb, rb)
-                if ov > best_ov:
-                    best_ov, best = ov, i
-            keyed.append((best, (lb[1] + lb[3]) / 2, ln))
-        # 4) порядок: (индекс региона в порядке чтения, затем Y внутри)
-        keyed.sort(key=lambda k: (k[0], k[1]))
-        return [k[2] for k in keyed]
 
     def _load_image(self, image_path: str) -> np.ndarray:
         """
@@ -533,13 +467,11 @@ class OCRPipeline:
         return None
 
     def _ocr_image(self, image: np.ndarray, page_num: int) -> Dict:
-        """OCR для одного изображения страницы (deskew -> reading_order/обычный)."""
+        """OCR для одного изображения страницы (deskew -> порядок чтения/обычный)."""
         if self.deskew:
             from .deskew import deskew_image
             image, _ = deskew_image(image)
-        if self.reading_order and self._ro is not None:
-            page_results = self._ocr_by_regions(image)
-        elif self.experimental_layout_order and self._layout is not None:
+        if self.reading_order:
             page_results = self._ocr_layout_order(image)
         else:
             page_results = self._ocr_whole(image)

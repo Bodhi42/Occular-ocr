@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.0
+
+- **`reading_order` now means reading order by layout regions, and it is on by default.** Lines come out
+  in reading order: multi-column pages are read column by column instead of across. Layout regions plus
+  the trained block-order model (formerly `experimental_layout_order=True`) order the lines. On 755
+  English pages of OmniDocBench with human-annotated order, the share of line pairs (from different
+  blocks) in the right order rose from 85.4 % to 92.0 % (two columns 72.8 → 84.3 %, three columns
+  63.5 → 79.3 %; one column 99.3 → 98.6 %), and CER on 947 pages with page-level reference text
+  (OmniDocBench, plus two sets of Russian documents) fell from 0.341 to 0.225. A block that lies (80 % or
+  more) inside a larger block is not used as a block, so the lines of one paragraph are not split between
+  "half a column" and "the whole column" (CER 0.229 → 0.225). `reading_order=False` (CLI `--no-reading-order`) gives
+  plain top-to-bottom order. Lines and their text are unchanged; each line gains `layout_region` and
+  `layout_label`. The weights (~55 MB) are downloaded on first use, and a page takes ~14 % longer.
+- **Removed:** the settings `experimental_layout_order` and `layout_order_method` (with its XY-cut
+  option), and the older reading-order model behind `reading_order=True` (90.7 % on the same pages, about
+  twice as slow). `download_reading_order()` and `reading_order_ready()` now fetch and check the layout
+  and block-order weights.
+- **`unwarp` is one setting: `False` (default), `True` or `"always"`.** `True` dewarps a page only when
+  its text then reads better (the former `unwarp_gate=True`), `"always"` dewarps every page; the UVDoc
+  model is downloaded by itself, no model id needed. `unwarp_gate` and `unwarp_margin` are removed (the
+  threshold stays 1.05). It stays off by default: on 213 scans and documents it doubled the time per page
+  (each page is recognized twice) and changed the text on 7 pages.
+- **`ocr()` and the CLI keep the reading order in their text.** Both re-sorted the lines top to bottom
+  before printing, so the reading order was lost in plain text; `OCRPipeline.get_text()` was not
+  affected. `ocr()` and `ocr_detailed()` gain a `reading_order` argument.
+- **Switching recognizer or languages in one process now takes effect.** Recognizer instances were cached
+  by name, threads, GPU and LM only, so after `ocr(..., languages=["uk"])` a later
+  `ocr(..., languages=["kk"])` reused the Ukrainian set-up, and `recognizer="svtr_t"` after a default call
+  kept the default model (since 0.2.1). The cache now keys on all constructor arguments.
+- **Unknown language codes raise an error** listing the supported codes, instead of silently sending
+  every line to the Cyrillic model without a language model. Codes are case-insensitive (`"RU"` = `"ru"`).
+- **`model_info()` and `layout_ready()` see weights in the Hugging Face cache.** They looked only in
+  `occular/weights/`, so with the usual download-on-first-use the detector and recognizer showed as
+  `MISSING (required!)`, and the language model always showed as present.
+
 ## 0.5.0
 
 - **Layout regions (new, optional): `LayoutDetector`.** Returns the regions of a page — box in

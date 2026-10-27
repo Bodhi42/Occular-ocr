@@ -34,21 +34,16 @@ class Settings:
     # --- препроцессинг ---
     orientation: bool = False             # определять поворот страницы (0/90/180/270°) и выпрямлять; ВЫКЛ по умолчанию
     deskew: bool = True                   # выпрямлять наклон скана перед детекцией
-    # Нейро-расправление изгиба (UVDoc): None = ВЫКЛ (по умолч). Строка = HF model_id или локальная
-    # папка с весами (напр. "Shivin11/occular-uvdoc"), либо готовый UVDocUnwarper. Исполняется через ONNX.
-    unwarp: Union[None, str, object] = None
-    unwarp_gate: Union[bool, float] = True   # True=readability-гейт×unwarp_margin; False/None=всегда; число=свой порог; callable(res_orig,res_dew)->bool
-    unwarp_margin: float = 1.05           # порог-множитель читаемости для дефолтного гейта (unwarp_gate=True)
+    # Нейро-расправление изгиба (UVDoc, ONNX) для фото и изогнутых страниц: False = ВЫКЛ (по умолч.),
+    # True = только если так читается лучше (~×2 время), "always" = всегда без проверки
+    unwarp: Union[bool, str] = False
 
     # --- декодирование ---
     lm: bool = True                       # beam-CTC + языковая модель (−25% WER; качает LM с HF при 1-м запуске)
 
     # --- постпроцессинг ---
-    reading_order: bool = False           # порядок чтения (нужна докачка layout-модели с HF)
-    # ЭКСПЕРИМЕНТ: порядок чтения по layout-регионам (D-FINE-S). ВЫКЛ; не вместе с reading_order.
-    experimental_layout_order: bool = False
-    # чем упорядочивать блоки в этом режиме: 'model' (обученная модель порядка, по умолч.) или 'xycut' (правило)
-    layout_order_method: str = "model"
+    # порядок чтения по layout-регионам (D-FINE-S + обученная модель порядка блоков); False = сверху вниз
+    reading_order: bool = True
 
     # --- таблицы ---
     # Находить таблицы и раскладывать строки по ячейкам: строки получают ключи 'table'/'cell', структура —
@@ -78,11 +73,9 @@ class Settings:
             f"  languages     = {self.languages or 'ru/en (default)'}  (None = ru/en; a list of codes or 'auto' = multilingual)\n"
             f"  orientation   = {self.orientation}  (preprocessing: page rotation 0/90/180/270°)\n"
             f"  deskew        = {self.deskew}   (preprocessing: straighten skew)\n"
-            f"  unwarp        = {self.unwarp if self.unwarp is not None else 'None (off)'}  (preprocessing: UVDoc dewarping, ONNX)\n"
+            f"  unwarp        = {self.unwarp!r}  (preprocessing: dewarp curved pages; True = when it reads better, 'always')\n"
             f"  lm            = {self.lm}   (beam-CTC + language model; -25% WER, downloads the LM from HF)\n"
-            f"  reading_order = {self.reading_order}  (postprocessing: reading order, extra download)\n"
-            f"  experimental_layout_order = {self.experimental_layout_order}  (EXPERIMENTAL: order by layout regions)\n"
-            f"  layout_order_method = {self.layout_order_method}  ('model' = trained block order, 'xycut' = rule)\n"
+            f"  reading_order = {self.reading_order}  (postprocessing: reading order by layout regions)\n"
             f"  tables        = {self.tables}  (tables: lines into cells, Markdown tables in text)\n"
             f"  detector      = {self.detector or 'auto'}\n"
             f"  recognizer    = {self.recognizer or 'svtr_lcnet (default)'}"

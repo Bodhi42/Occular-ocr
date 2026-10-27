@@ -35,11 +35,10 @@ def test_processes_safe_requires_main_guard(tmp_path, monkeypatch):
 
 def test_can_use_processes():
     ok = types.SimpleNamespace(_init_kwargs=dict(detector_name="dbnet-onnx", recognizer_name="crnn-onnx",
-                                                 unwarp=None, unwarp_gate=True))
+                                                 unwarp=True))
     import occular  # noqa: F401 — регистрирует стандартные компоненты
     assert P.can_use_processes(ok)
-    assert not P.can_use_processes(types.SimpleNamespace(_init_kwargs={**ok._init_kwargs, "unwarp": object()}))
-    assert not P.can_use_processes(types.SimpleNamespace(_init_kwargs={**ok._init_kwargs, "unwarp_gate": lambda a, b: True}))
+    assert not P.can_use_processes(types.SimpleNamespace(_init_kwargs={**ok._init_kwargs, "recognizer_name": "nope"}))
     assert not P.can_use_processes(types.SimpleNamespace())
 
 
