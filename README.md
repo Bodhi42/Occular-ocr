@@ -28,6 +28,8 @@ nothing to build.**
 
 ## See it in action
 
+📖 [See it in action — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Home#document--result)
+
 <p align="center">
   <img src="assets/demo_passport.png" width="24%" alt="Detected lines on a specimen passport">
   <img src="assets/demo_2ndfl.png"    width="24%" alt="Detected lines on a synthetic income certificate">
@@ -83,6 +85,8 @@ document workloads far better than any synthetic or public dataset can.
 
 ## Installation
 
+📖 [Installation — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Getting-started#install)
+
 ```bash
 pip install occular-ocr
 ```
@@ -108,6 +112,8 @@ something, `pip install --only-binary=:all: occular-ocr` makes it use the newest
 
 ### GPU (optional)
 
+📖 [GPU (optional) — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Performance-and-GPU#have-an-nvidia-gpu)
+
 Every model is ONNX; on GPU the same files run on CUDA through ONNX Runtime, so there are no extra
 weights and no PyTorch. On Linux and Windows the base install already uses the GPU build of ONNX
 Runtime (it runs on CPU just as fast when there is no GPU). The extra only adds the CUDA and cuDNN
@@ -127,6 +133,8 @@ an older driver (CUDA 12.x) it falls back to CPU; keep the last CUDA 12 build in
 ---
 
 ## Quick start
+
+📖 [Quick start — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Getting-started#read-the-supplied-image)
 
 ```python
 from occular import ocr
@@ -154,6 +162,8 @@ ocr ./scans ./out          # writes ./out/<name>.txt for every image/PDF
 
 ## Configuration
 
+📖 [Configuration — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Python-API#a-reusable-reader-with-settings)
+
 All behaviour is controlled by `Settings` (or the equivalent keyword arguments on `ocr`). Print the
 current defaults at any time:
 
@@ -178,6 +188,8 @@ print(Settings())
 
 ### Full pipeline with every setting
 
+📖 [Full pipeline with every setting — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Python-API#a-reusable-reader-with-settings)
+
 ```python
 from occular import OCRPipeline, Settings
 
@@ -199,6 +211,8 @@ result = pipe.process_image("document.png")
 ```
 
 ### PDF: render DPI and parallel workers
+
+📖 [PDF: render DPI and parallel workers — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/PDFs-and-coordinates)
 
 ```python
 pages = pipe.process_pdf(
@@ -228,6 +242,8 @@ if __name__ == "__main__":
 
 ### One-liners
 
+📖 [One-liners — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Python-API)
+
 ```python
 from occular import ocr
 
@@ -241,6 +257,8 @@ ocr("document.png", num_threads=2)  # limit CPU threads
 ```
 
 ### Languages
+
+📖 [Languages — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Languages)
 
 By default Occular reads **Russian and English**. Pass `languages=` to switch on the multilingual
 model, which adds **12 more Cyrillic-script languages**: Bashkir (`ba`), Belarusian (`be`),
@@ -265,6 +283,8 @@ The right language weights download from the Hub on first use (only the ones you
 languages are added over time in minor releases.
 
 ### Command line
+
+📖 [Command line — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Command-line)
 
 ```bash
 # Single file — text to stdout
@@ -296,6 +316,8 @@ ocr document.png --out result.json
 | `--json` | off | Print full JSON (with coordinates) to stdout. |
 
 ### Reading order
+
+📖 [Reading order — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Layout-and-reading-order)
 
 On by default (`reading_order=True`): lines come out in reading order, so multi-column pages are read
 column by column, not across. occular finds the layout regions of the page (`LayoutDetector`), puts
@@ -333,6 +355,8 @@ Text-layer PDF pages keep the order of their text layer.
 
 ## Layout regions
 
+📖 [Layout regions — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Layout-and-reading-order#find-page-areas-for-your-app)
+
 `LayoutDetector` returns the regions of a page — box, confidence and label — as a geometric basis
 for reading order and downstream processing:
 
@@ -361,6 +385,8 @@ guideline. In particular, a photographed document is sometimes labelled `Picture
 tables are often labelled `Form`.
 
 ## Tables
+
+📖 [Tables — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Tables)
 
 Turn on `tables` like any other setting. The pipeline finds tables on the same page image it reads
 (after deskew/rotation/dewarp), reconstructs each table's grid and merged cells (`colspan`/`rowspan`)
@@ -418,6 +444,8 @@ Version 0.2.0 also keeps scaling under concurrent load: on a 64-core machine 16 
 
 ## How it works
 
+📖 [How it works — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/How-OCR-works)
+
 ```
 image ─▶ deskew ─▶ DBNet detector ─▶ crops ─▶ SVTR recognizer ─▶ beam + n-gram LM ─▶ text
 ```
@@ -432,6 +460,8 @@ platform; the optional Rust decoder gives the same output faster.
 ---
 
 ## Models & weights
+
+📖 [Models & weights — Wiki](https://github.com/Bodhi42/Occular-ocr/wiki/Models-and-offline-use)
 
 Weights are fetched automatically on first use and cached:
 
@@ -504,6 +534,8 @@ DBNet-детектор текста + SVTR-распознаватель + beam-�
 
 ## Демонстрация
 
+📖 [Демонстрация — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Home-RU#документ--результат)
+
 <p align="center">
   <img src="assets/demo_passport.png" width="24%" alt="Строки на образце паспорта">
   <img src="assets/demo_2ndfl.png"    width="24%" alt="Строки на синтетической справке о доходах">
@@ -558,6 +590,8 @@ Occular-OCR заточен под русский и читает его знач
 
 ## Установка
 
+📖 [Установка — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Getting-started-RU#установка)
+
 ```bash
 pip install occular-ocr
 ```
@@ -583,6 +617,8 @@ Windows на ARM не поддерживается (у части зависим
 
 ### GPU (опционально)
 
+📖 [GPU (опционально) — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Performance-and-GPU-RU#есть-nvidia-gpu)
+
 Все модели — ONNX; на GPU те же файлы исполняются на CUDA через ONNX Runtime, без отдельных весов и
 без PyTorch. На Linux и Windows базовая установка уже ставит GPU-сборку ONNX Runtime (без видеокарты
 она работает на CPU с той же скоростью). Экстра добавляет только библиотеки CUDA и cuDNN из pip —
@@ -602,6 +638,8 @@ ONNX Runtime 1.27 и новее собран под CUDA 13 и требует д
 ---
 
 ## Быстрый старт
+
+📖 [Быстрый старт — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Getting-started-RU#распознайте-изображение-из-примера)
 
 ```python
 from occular import ocr
@@ -629,6 +667,8 @@ ocr ./scans ./out          # пишет ./out/<имя>.txt для каждого
 
 ## Настройки
 
+📖 [Настройки — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Python-API-RU#переиспользуемый-конвейер-с-настройками)
+
 Всё поведение задаётся через `Settings` (или эквивалентные именованные аргументы `ocr`). Посмотреть
 текущие дефолты можно в любой момент:
 
@@ -653,6 +693,8 @@ print(Settings())
 
 ### Пайплайн со всеми настройками
 
+📖 [Пайплайн со всеми настройками — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Python-API-RU#переиспользуемый-конвейер-с-настройками)
+
 ```python
 from occular import OCRPipeline, Settings
 
@@ -674,6 +716,8 @@ result = pipe.process_image("document.png")
 ```
 
 ### PDF: DPI рендеринга и параллельные воркеры
+
+📖 [PDF: DPI рендеринга и параллельные воркеры — вики](https://github.com/Bodhi42/Occular-ocr/wiki/PDFs-and-coordinates-RU)
 
 ```python
 pages = pipe.process_pdf(
@@ -703,6 +747,8 @@ if __name__ == "__main__":
 
 ### Однострочники
 
+📖 [Однострочники — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Python-API-RU)
+
 ```python
 from occular import ocr
 
@@ -716,6 +762,8 @@ ocr("document.png", num_threads=2)  # ограничить CPU-потоки
 ```
 
 ### Языки
+
+📖 [Языки — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Languages-RU)
 
 По умолчанию Occular читает **русский и английский**. Аргумент `languages=` включает многоязычную
 модель — ещё **12 языков на кириллице**: башкирский (`ba`), белорусский (`be`), болгарский (`bg`),
@@ -740,6 +788,8 @@ ocr scan.png   --languages auto
 добавляются со временем в минорных релизах.
 
 ### Командная строка
+
+📖 [Командная строка — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Command-line-RU)
 
 ```bash
 # Один файл — текст в stdout
@@ -771,6 +821,8 @@ ocr document.png --out result.json
 | `--json` | выкл | Вывести полный JSON (с координатами) в stdout. |
 
 ### Порядок чтения
+
+📖 [Порядок чтения — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Layout-and-reading-order-RU)
 
 Включён по умолчанию (`reading_order=True`): строки выдаются в порядке чтения, многоколоночная
 страница читается по колонкам, а не поперёк. occular находит layout-регионы страницы
@@ -808,6 +860,8 @@ for line in OCRPipeline().process_image("page.png"):
 
 ## Layout-регионы
 
+📖 [Layout-регионы — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Layout-and-reading-order-RU#получите-области-страницы-для-своего-приложения)
+
 `LayoutDetector` возвращает регионы страницы — прямоугольник, уверенность и метку — как
 геометрическую основу для порядка чтения и дальнейшей обработки:
 
@@ -836,6 +890,8 @@ layout.to_dict()                                 # {"width", "height", "regions"
 документ иногда целиком помечается `Picture`, а таблицы часто — `Form`.
 
 ## Таблицы
+
+📖 [Таблицы — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Tables-RU)
 
 Таблицы включаются как любая другая настройка — `tables`. Конвейер ищет таблицы на той же картинке,
 по которой читает текст (после выпрямления, поворота и расправления), восстанавливает сетку и
@@ -894,6 +950,8 @@ for t in tr(page):
 
 ## Как это работает
 
+📖 [Как это работает — вики](https://github.com/Bodhi42/Occular-ocr/wiki/How-OCR-works-RU)
+
 ```
 картинка ─▶ deskew ─▶ DBNet-детектор ─▶ кропы ─▶ SVTR-распознаватель ─▶ beam + n-gram LM ─▶ текст
 ```
@@ -908,6 +966,8 @@ for t in tr(page):
 ---
 
 ## Модели и веса
+
+📖 [Модели и веса — вики](https://github.com/Bodhi42/Occular-ocr/wiki/Models-and-offline-use-RU)
 
 Веса скачиваются автоматически при первом запуске и кэшируются:
 
