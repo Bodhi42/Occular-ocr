@@ -1,6 +1,5 @@
 """Лёгкий определитель языка: char-n-gram (order 4, stupid backoff). ЧИСТЫЙ Python — без sklearn/numpy/scipy.
 Классы: 12 кириллических языков + русский. Модель — langid_models.pkl (14 МБ, счётчики n-грамм)."""
-import io
 import math
 import pickle
 
