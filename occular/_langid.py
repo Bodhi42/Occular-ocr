@@ -1,7 +1,44 @@
 """Лёгкий определитель языка: char-n-gram (order 4, stupid backoff). ЧИСТЫЙ Python — без sklearn/numpy/scipy.
 Классы: 12 кириллических языков + русский. Модель — langid_models.pkl (14 МБ, счётчики n-грамм)."""
+import io
 import math
 import pickle
+
+
+_ALLOWED_GLOBALS = {
+    ("builtins", "dict"),
+    ("builtins", "list"),
+    ("builtins", "tuple"),
+    ("builtins", "set"),
+    ("builtins", "frozenset"),
+    ("builtins", "int"),
+    ("builtins", "float"),
+    ("builtins", "str"),
+    ("builtins", "bytes"),
+    ("builtins", "bool"),
+    ("builtins", "complex"),
+    ("builtins", "slice"),
+    ("builtins", "range"),
+    ("collections", "Counter"),
+    ("collections", "defaultdict"),
+    ("collections", "OrderedDict"),
+}
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    """Only plain data containers and numbers; other globals are rejected."""
+
+    def find_class(self, module, name):
+        if (module, name) in _ALLOWED_GLOBALS:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(f"forbidden global: {module}.{name}")
+
+
+def _load_model(path):
+    with open(path, "rb") as handle:
+        return _RestrictedUnpickler(handle).load()
+
+
 
 ORDER = 4
 LAM = 0.4
@@ -40,7 +77,7 @@ class LangID:
     """char-n-gram определитель. identify(text, candidates) → язык среди кандидатов."""
 
     def __init__(self, pkl_path):
-        self.models, self.V = pickle.load(open(pkl_path, 'rb'))
+        self.models, self.V = _load_model(pkl_path)
         self.langs = list(self.models)
 
     def identify(self, text, candidates=None):
