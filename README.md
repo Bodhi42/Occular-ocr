@@ -2,8 +2,11 @@
 
 # Occular-OCR
 
+## 📖 [Read the Wiki](https://github.com/Bodhi42/Occular-ocr/wiki) · [Вики на русском](https://github.com/Bodhi42/Occular-ocr/wiki/Home-RU)
+
 **State-of-the-art OCR for Russian documents — with a zero-compilation install.**
 
+[![Version: 0.5.1](https://img.shields.io/badge/version-0.5.1-2f5ff0.svg)](CHANGELOG.md)
 [![Code License: Apache 2.0](https://img.shields.io/badge/Code-Apache%202.0-2f5ff0.svg)](LICENSE)
 [![Weights: OpenRAIL-M](https://img.shields.io/badge/Weights-AI%20Pubs%20OpenRAIL--M-e0533a.svg)](WEIGHTS_LICENSE.md)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-16181d.svg)](#installation)
