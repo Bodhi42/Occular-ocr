@@ -1,0 +1,27 @@
+{
+  "id": "f2-t1-s6-clean",
+  "origin": "Existing prospectively frozen576-render synthetic cohort; not a real document.",
+  "selection": "Post hoc illustrative selection of a non-whitespace character deletion satisfying natural-exact, padded-wrong, corrected-exact. No model or cohort reselection.",
+  "manifest_sha256": "516e3fb753da546540fa4101b9f11cd74f41a4ea22b9d2e9d42bcc4f32b74027",
+  "predictions_sha256": "41a9e658efa6dad3bd19701a661e3dcff71aab210f09b3497537d59e394c12c2",
+  "protocol_sha256": "88a9c018125a34245bdb9da57b4278480a9e67a168acbf6f3f39102f273c5a4f",
+  "image_sha256": "3232f887796b0e5eb2820317dc2fbe547b64ecc15575a7dcc96eb083a51990f9",
+  "reference": "Получатель: отдел 41",
+  "baseline_natural": "Получатель: отдел 41",
+  "baseline_padded": "Получатель: отдел 4",
+  "guard_padded": "Получатель: отдел 41",
+  "network_input_shape_natural": [
+    1,
+    3,
+    48,
+    357
+  ],
+  "network_input_shape_padded": [
+    1,
+    3,
+    48,
+    640
+  ],
+  "decoder": "Recorded beam+LM, width100, alpha0.5, beta1, code locking enabled",
+  "no_new_render_or_inference": true
+}

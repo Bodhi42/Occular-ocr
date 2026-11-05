@@ -25,13 +25,33 @@ WEIGHTS_REVISION = None
 import os as _os
 WEIGHTS_REVISION = _os.environ.get("OCCULAR_WEIGHTS_REVISION", WEIGHTS_REVISION)
 
+# Optional experimental derivative; the original LCNet file remains unchanged.
+WSP_RECOGNIZER_FILE = "recognizer_svtr_lcnet_wsp_fp32.onnx"
+WSP_RECOGNIZER_SHA256 = "24c5db4e64ad0a9bb8859b501670eff68969264ff0bee8af7130e3eb50f565f6"
+WSP_CHARSET_SHA256 = "b4943823e5f46eb162fb1bce8ba341da89729cb62ed0617ee1c1f27ea0497303"
+
+
+def _check_wsp_weight(path: str) -> str:
+    import hashlib
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != WSP_RECOGNIZER_SHA256:
+        raise RuntimeError(
+            "svtr_lcnet_wsp checkpoint SHA-256 mismatch; expected "
+            f"{WSP_RECOGNIZER_SHA256}. Obtain the exact research checkpoint; "
+            "the original model is not substituted automatically."
+        )
+    return str(path)
+
 
 def ensure_weight(rel_path: str) -> str:
     """Путь к файлу веса: сначала локально в weights/, иначе качаем с HF (WEIGHTS_HF_REPO) в кэш.
     Ревизия закрепляется через WEIGHTS_REVISION (commit SHA) для воспроизводимости."""
     local = WEIGHTS_DIR / rel_path
     if local.exists():
-        return str(local)
+        return _check_wsp_weight(str(local)) if rel_path == WSP_RECOGNIZER_FILE else str(local)
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
@@ -39,6 +59,17 @@ def ensure_weight(rel_path: str) -> str:
             f"Weights '{rel_path}' are not available locally and huggingface_hub is not installed. "
             f"pip install huggingface_hub  (or put the file at {local})"
         )
+    if rel_path == WSP_RECOGNIZER_FILE:
+        try:
+            path = hf_hub_download(WEIGHTS_HF_REPO, rel_path, revision=WEIGHTS_REVISION)
+        except Exception as exc:
+            raise RuntimeError(
+                "Experimental svtr_lcnet_wsp weights are unavailable. Download "
+                f"{WSP_RECOGNIZER_FILE} from {WEIGHTS_HF_REPO}, or place the exact "
+                f"file in {WEIGHTS_DIR}. Check OCCULAR_WEIGHTS_REVISION if pinned "
+                "to an older snapshot. Use recognizer='svtr_lcnet' for the original model."
+            ) from exc
+        return _check_wsp_weight(path)
     return hf_hub_download(WEIGHTS_HF_REPO, rel_path, revision=WEIGHTS_REVISION)
 
 
@@ -116,6 +147,13 @@ MODELS = {
         "desc": "Light ru/en recognizer (LCNet stem), ONNX FP32 — the default model, "
                 "~4x faster than svtr_t at 99.6% of its quality; local in weights/ or from Hugging Face",
         "required": True,
+    },
+    "Recognizer svtr_lcnet_wsp (experimental, CPU)": {
+        "files": [WSP_RECOGNIZER_FILE, "recognizer_charset.txt"],
+        "desc": "Optional ru/en LCNet padding-robustness edit (385 parameters). "
+                "Select recognizer='svtr_lcnet_wsp'; CPU only. Original weights remain the default.",
+        "required": False,
+        "sha256": {WSP_RECOGNIZER_FILE: WSP_RECOGNIZER_SHA256},
     },
     "Recognizer svtr_t (larger, optional)": {
         "files": ["recognizer_svtr_fp32.onnx", "recognizer_charset.txt"],

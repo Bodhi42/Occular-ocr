@@ -6,7 +6,7 @@
 
 **State-of-the-art OCR for Russian documents — with a zero-compilation install.**
 
-[![Version: 0.5.1](https://img.shields.io/badge/version-0.5.1-2f5ff0.svg)](CHANGELOG.md)
+[![Version: 0.5.2](https://img.shields.io/badge/version-0.5.2-2f5ff0.svg)](CHANGELOG.md)
 [![Code License: Apache 2.0](https://img.shields.io/badge/Code-Apache%202.0-2f5ff0.svg)](LICENSE)
 [![Weights: OpenRAIL-M](https://img.shields.io/badge/Weights-AI%20Pubs%20OpenRAIL--M-e0533a.svg)](WEIGHTS_LICENSE.md)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-16181d.svg)](#installation)
@@ -458,6 +458,32 @@ search alike — is **pure Python** by default, which is what keeps `pip install
 platform; the optional Rust decoder gives the same output faster.
 
 ---
+
+### Experimental: Weight-Space Programming
+
+An AI coding agent identified padding-induced errors in the SVTR-LCNet
+recognizer. A targeted edit changed 385 existing parameters (384 weights and
+one bias) without gradient-based training or additional operations.
+Original weights remain the default; the experimental alternative is opt-in:
+
+```python
+from occular import ocr
+text = ocr("document.png", recognizer="svtr_lcnet_wsp", gpu=False)
+```
+
+```bash
+ocr document.png --model svtr_lcnet_wsp
+```
+
+The strongest confirmed benefit is padding robustness, not general OCR
+improvement. CPU evaluation is supported; CUDA numerical equivalence has
+not passed validation. WSP accepts only RU/EN; multilingual routing and
+`languages="auto"` are rejected. The new checkpoint downloads only when
+selected and is not bundled with the wheel. Original preprocessing,
+batching, decoding, detector behavior and other recognizers are unchanged.
+
+[Usage and limits](docs/weight-space-programming.md) ·
+[Research materials and frozen reproduction](https://github.com/Bodhi42/Occular-ocr/tree/main/research/weight_space_programming)
 
 ## Models & weights
 

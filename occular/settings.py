@@ -54,6 +54,7 @@ class Settings:
     # --- выбор моделей ---
     # recognizer: архитектура распознавателя — 'svtr_lcnet' (по умолчанию: лёгкая, ~4x быстрее,
     # качество 99.6% от svtr_t) или 'svtr_t' (крупная, исходная). None = svtr_lcnet.
+    # 'svtr_lcnet_wsp' — experimental RU/EN padding-robustness weights, CPU only, opt-in.
     detector: Optional[str] = None
     recognizer: Optional[str] = None
 

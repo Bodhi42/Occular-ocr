@@ -51,3 +51,6 @@ occular/_vcrt/*.dll
 # сборка нативного декодера
 native/crate/target/
 !occular/_vcrt/occular-vcrt.pth
+
+# Local release staging, evaluation outputs and unuploaded weight binaries
+release_artifacts/

@@ -117,6 +117,12 @@ class OCRPipeline:
         detector_kwargs = detector_kwargs or {}
         recognizer_kwargs = recognizer_kwargs or {}
         self.gpu = bool(gpu)
+        if recognizer_kwargs.get("arch") == "svtr_lcnet_wsp":
+            from .recognizer_onnx import _validate_wsp_options
+            _validate_wsp_options(
+                "svtr_lcnet_wsp", self.gpu or recognizer_kwargs.get("gpu", False),
+                recognizer_kwargs.get("languages"), recognizer_kwargs.get("family", "ru"),
+                recognizer_kwargs.get("onnx_file"), recognizer_kwargs.get("charset_file"))
 
         # Число потоков на страницу: по умолчанию min(доступные ядра, 8). Замер (EPYC, 64 ядра):
         # 4 потока — 2.35 с/стр, 8 — 1.64, 16 — 1.31, дальше не быстрее, а с 64 медленнее (1.53, 128 — 2.16)

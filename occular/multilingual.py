@@ -28,6 +28,9 @@ class MultilingualRouter:
                  arch: str = None):
         from .recognizer_onnx import DEFAULT_ARCH
         self._arch = arch or DEFAULT_ARCH                       # одна архитектура на обе модели
+        if self._arch == "svtr_lcnet_wsp":
+            raise ValueError("svtr_lcnet_wsp is an RU/EN-only experimental recognizer; "
+                             "use recognizer='svtr_lcnet_wsp' without multilingual routing.")
         self._num_threads = num_threads
         self._gpu = gpu
         self._use_lm = bool(lm)

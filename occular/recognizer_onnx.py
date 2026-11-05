@@ -24,8 +24,36 @@ RECOGNIZER_ARCHS = {
                    "cyr": ("recognizer_svtr_lcnet_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt")},
     "svtr_t":     {"ru":  ("recognizer_svtr_fp32.onnx", "recognizer_charset.txt"),
                    "cyr": ("recognizer_svtr_cyr12_fp32.onnx", "recognizer_charset_cyr12.txt")},
+    "svtr_lcnet_wsp": {"ru": ("recognizer_svtr_lcnet_wsp_fp32.onnx", "recognizer_charset.txt")},
 }
 DEFAULT_ARCH = "svtr_lcnet"
+WSP_ARCH = "svtr_lcnet_wsp"
+
+
+def _validate_wsp_options(arch, gpu=False, languages=None, family="ru",
+                          onnx_file=None, charset_file=None):
+    """Validate only the new experimental option, before any model is loaded."""
+    if arch != WSP_ARCH:
+        return None
+    if gpu:
+        raise ValueError("svtr_lcnet_wsp is experimental and CPU-only: CUDA numerical "
+                         "equivalence has not passed validation. Use gpu=False (omit --gpu).")
+    if family != "ru":
+        raise ValueError("svtr_lcnet_wsp supports only the original RU/EN recognizer, "
+                         "not Cyrillic-12 or multilingual models.")
+    codes = None
+    if languages:
+        values = [languages] if isinstance(languages, str) else languages
+        codes = [str(value).strip().lower() for value in values]
+        if any(value not in {"ru", "en"} for value in codes):
+            raise ValueError("svtr_lcnet_wsp supports only languages=['ru', 'en'] "
+                             "(or None); multilingual languages and 'auto' are unsupported.")
+    if onnx_file and onnx_file != RECOGNIZER_ARCHS[WSP_ARCH]["ru"][0]:
+        raise ValueError("svtr_lcnet_wsp requires its exact pinned research checkpoint; "
+                         "onnx_file cannot select another model.")
+    if charset_file and charset_file != "recognizer_charset.txt":
+        raise ValueError("svtr_lcnet_wsp requires the original RU/EN recognizer_charset.txt.")
+    return codes
 
 
 def arch_files(arch: str, family: str = "ru"):
@@ -33,6 +61,8 @@ def arch_files(arch: str, family: str = "ru"):
     if arch not in RECOGNIZER_ARCHS:
         raise ValueError(f"unknown recognizer architecture {arch!r}; "
                          f"available: {', '.join(RECOGNIZER_ARCHS)}")
+    if arch == WSP_ARCH and family != "ru":
+        _validate_wsp_options(arch, family=family)
     return RECOGNIZER_ARCHS[arch][family]
 
 
@@ -43,6 +73,7 @@ class CRNNRecognizerONNX:
                  lm: bool = True, onnx_file: str = None, charset_file: str = None,
                  arch: str = DEFAULT_ARCH, family: str = "ru"):
         # Файлы берутся из архитектуры; onnx_file/charset_file — явное переопределение.
+        _validate_wsp_options(arch, gpu, languages, family, onnx_file, charset_file)
         self.arch = arch
         self.family = family                    # 'ru' (ru/en) или 'cyr' (12 кир-языков)
         _onnx, _charset = arch_files(arch, family)
@@ -55,6 +86,12 @@ class CRNNRecognizerONNX:
         self._lm_lock = threading.Lock()   # ленивая инициализация LM — потокобезопасно (общий инстанс у PDF-воркеров)
         from .model_files import ensure_weight
         charset_path = Path(ensure_weight(charset_file))
+        if arch == WSP_ARCH:
+            import hashlib
+            from .model_files import WSP_CHARSET_SHA256
+            if hashlib.sha256(charset_path.read_bytes()).hexdigest() != WSP_CHARSET_SHA256:
+                raise RuntimeError("svtr_lcnet_wsp requires the exact original RU/EN charset; "
+                                   "recognizer_charset.txt SHA-256 mismatch.")
         # Charset: индекс 0 = CTC blank; символ для класса k = vocab[k-1] (как rec_data.Charset)
         self.vocab = charset_path.read_text(encoding='utf-8').split('\n')
         try: cv2.setNumThreads(max(1, int(num_threads)))  # OpenCV по умолч. берёт все ядра
@@ -62,6 +99,10 @@ class CRNNRecognizerONNX:
 
         from ._runtime import make_session, session_on_gpu
         self.session = make_session(ensure_weight(self._onnx_file), num_threads, gpu)
+        if arch == WSP_ARCH:
+            classes = self.session.get_outputs()[0].shape[-1]
+            if isinstance(classes, int) and classes != len(self.vocab) + 1:
+                raise RuntimeError("svtr_lcnet_wsp output classes do not match its CTC charset.")
         self.input_name = self.session.get_inputs()[0].name  # 'x'
         print(f"Loaded SVTR recognizer (vocab={len(self.vocab)} chars, "
               f"{'GPU/CUDA' if session_on_gpu(self.session) else 'CPU'}, threads={max(1, int(num_threads))})",

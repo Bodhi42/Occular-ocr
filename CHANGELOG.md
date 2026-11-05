@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2
+
+- Add the opt-in experimental RU/EN recognizer `svtr_lcnet_wsp`, using the exact 385-parameter SE correction from the WSP study. CPU only; GPU and multilingual combinations fail explicitly.
+- Original `svtr_lcnet` weights and all defaults remain unchanged. Existing users do not receive WSP weights automatically. DBNet, other recognizers, preprocessing, batching and decoding are unchanged.
+- Validate the WSP checkpoint and original RU/EN charset by SHA-256. Missing or incorrect optional weights produce an actionable error, without silent fallback.
+- Add paired image/PDF comparison with HTML/optional JSON output, a frozen scientific replay and regression/integration checks. No extra mandatory dependencies or model binaries in wheel/sdist.
+- Known pre-existing issue: `test_code_lock.py::test_inn_kpp_digits_kept` also fails on unchanged 0.5.1; the decoder is intentionally preserved for compatibility. See release validation notes before publication.
+
 ## 0.5.1
 
 - **`reading_order` now means reading order by layout regions, and it is on by default.** Lines come out

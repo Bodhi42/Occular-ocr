@@ -63,3 +63,12 @@ Occular-OCR.
 
 *This is a plain-language summary of the applicable modified AI Pubs OpenRAIL-M terms. Consult the
 full OpenRAIL-M text if you need the exact legal language.*
+
+## Weight-Space Programming derivative
+
+`recognizer_svtr_lcnet_wsp_fp32.onnx` is a derivative of the original RU/EN
+SVTR-LCNet checkpoint and remains covered by the same model-weights terms
+and downstream use restrictions above. The 385-parameter edit does not
+relicense the weights under Apache-2.0. The source-code license is unchanged.
+The derivative's original/edited SHA-256, changed tensors and CPU-only
+experimental status are documented in `docs/weight-space-programming.md`.

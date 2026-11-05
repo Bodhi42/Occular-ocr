@@ -135,9 +135,10 @@ Examples:
     parser.add_argument(
         "--model",
         type=str,
-        choices=["svtr_lcnet", "svtr_t"],
+        choices=["svtr_lcnet", "svtr_t", "svtr_lcnet_wsp"],
         default=None,
-        help="Recognizer architecture: svtr_lcnet (default, fast) or svtr_t (larger)"
+        help="Recognizer architecture: svtr_lcnet (default), svtr_t (larger), "
+             "or svtr_lcnet_wsp (experimental RU/EN, CPU only; opt-in weights)"
     )
 
     # Продвинутые опции

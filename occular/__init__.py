@@ -16,7 +16,7 @@ Occular OCR Package
     ocr document.pdf --workers 4
 """
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 import os
 from typing import Union, List, Dict, Optional
@@ -68,6 +68,10 @@ def _normalize_languages(languages, arch=None):
     Непустой список или 'auto' → мультиязычный роутер; вернуть (recognizer_name, recognizer_kwargs).
     arch — архитектура распознавателя ('svtr_lcnet' по умолчанию, 'svtr_t' — крупная)."""
     extra = {"arch": arch} if arch else {}
+    if arch == "svtr_lcnet_wsp":
+        from .recognizer_onnx import _validate_wsp_options
+        codes = _validate_wsp_options(arch, languages=languages)
+        return "crnn-onnx", {**extra, **({"languages": codes} if codes else {})}
     if not languages:
         return "crnn-onnx", (extra or None)
     if isinstance(languages, str):
@@ -108,7 +112,8 @@ def ocr(file_path: str, *, deskew: bool = True, lm: bool = True,
         num_threads: потоков на страницу (None = min(доступные, 8))
         gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
         orientation: определять поворот страницы (0/90/180/270°) и выпрямлять (по умолчанию False)
-        recognizer: архитектура распознавателя — 'svtr_lcnet' (по умолчанию) или 'svtr_t' (крупная)
+        recognizer: 'svtr_lcnet' (по умолчанию), 'svtr_t' или экспериментальная
+            'svtr_lcnet_wsp' (только RU/EN, CPU; исходные веса остаются по умолчанию)
         tables: находить таблицы; в тексте они выводятся Markdown-таблицами на своём месте (по умолчанию False)
         reading_order: порядок чтения по layout-регионам (по умолчанию True; False = просто сверху вниз)
         languages: язык(и) текста. None (по умолчанию) — русская модель (ru/en). Список кодов —
@@ -155,7 +160,7 @@ def ocr_detailed(file_path: str, *, deskew: bool = True, lm: bool = True,
         num_threads: потоков на страницу (None = min(доступные, 8))
         gpu: исполнять на GPU/CUDA (нужен пакет onnxruntime-gpu; иначе CPU)
         orientation: определять поворот страницы (0/90/180/270°) и выпрямлять (по умолчанию False)
-        recognizer: архитектура распознавателя — 'svtr_lcnet' (по умолчанию) или 'svtr_t' (крупная)
+        recognizer: 'svtr_lcnet' (по умолчанию), 'svtr_t' или 'svtr_lcnet_wsp' (experimental, RU/EN, CPU)
         languages: язык(и) текста (см. ocr()). None — русская модель (ru/en); список кодов или
             'auto' — мультиязычный роутер (русская + 12 кир-языков).
         tables: находить таблицы (по умолчанию False): строкам в таблице добавляются ключи 'table' и

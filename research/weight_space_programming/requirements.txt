@@ -1,0 +1,5 @@
+# Dedicated scientific replay environment, not runtime package dependencies.
+numpy==1.26.4
+onnxruntime==1.23.2
+opencv-python-headless==4.11.0.86
+Pillow==10.4.0

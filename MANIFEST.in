@@ -7,3 +7,9 @@ prune tests
 global-exclude *.onnx *.jpg *.jpeg *.png *.ipynb *.pyc
 
 global-exclude *.dll
+
+recursive-include examples *.py
+recursive-include docs *.md
+prune research
+prune release_artifacts
+include tools/prepare_wsp_weights.py
