@@ -53,9 +53,9 @@ checkpoint and charset hashes; a mismatch or missing download raises an
 explicit error, with no fallback to a different model. An environment pinned
 to an older `OCCULAR_WEIGHTS_REVISION` may not contain this new file.
 
-The checkpoint is not included in the wheel or sdist. Before its approved
-Hugging Face publication, use the separately staged exact local file or the
-frozen research compiler; see the release instructions. Derivative weights
+The checkpoint is not included in the wheel or sdist. Its public Hugging Face
+revision is `4848df59dd8f10bee7360366e8f2f067678bcda8`; the frozen research
+compiler also reconstructs its exact bytes. See the release instructions. Derivative weights
 retain [the original model-weights terms](../WEIGHTS_LICENSE.md), including
 commercial-use conditions. Apache-2.0 covers source code, not these weights.
 

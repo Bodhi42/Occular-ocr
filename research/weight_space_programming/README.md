@@ -50,8 +50,9 @@ python3.12 -m venv /tmp/occular-wsp-replay
 /tmp/occular-wsp-replay/bin/pip install 'huggingface_hub>=0.20'
 ```
 
-Obtain the exact original and WSP ONNX files from `Shivin11/occular-ocr`, or
-use a verified local WSP file before its approved upload. Expected hashes:
+Obtain the exact original and WSP ONNX files from `Shivin11/occular-ocr` at
+revision `4848df59dd8f10bee7360366e8f2f067678bcda8`, or use verified local
+files. Expected hashes:
 
 ```
 original  3de3ad346181af4e4446e6c365d5d9a8bfb187ad803d6f419dd61ad3509a65f2
